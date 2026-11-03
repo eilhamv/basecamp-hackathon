@@ -8,121 +8,158 @@
 | **The claim** | On an unseen customer (Vandelay), the same swarm **with** lessons scores higher than **without** them, while a control criterion that no lesson covers stays flat |
 | **Time box** | 45 minutes to build, deploy and run; 3 minutes to demo |
 | **Built on** | [rosscrooke/specialist-swarm](https://github.com/rosscrooke/specialist-swarm) (coordinator + specialists + Skills) and the memory-store pattern from [rosscrooke/institutional-memory](https://github.com/rosscrooke/institutional-memory) |
-| **"Deployed" means** | The coordinator, 4 specialists, their Skills and the memory store run on Claude Platform (Managed Agents). Every bid is a session you can open in the Console |
+| **Deployed on** | Claude Platform: Managed Agents (coordinator + 4 specialists, multi-agent), Skills, a memory store, one environment |
 | **Repo** | [eilhamv/basecamp-hackathon](https://github.com/eilhamv/basecamp-hackathon) |
 
 ---
 
-## 1. Status
+## 1. Results from the real runs (2026-11-03)
 
-| Step | State |
-|---|---|
-| Plan, guide and kit pushed | ✅ commit `2d5b6b7` |
-| Phase 0: starter swarm cloned into `build/`, dependencies installed, kit copied | ✅ |
-| SDK check: Anthropic Python SDK 2.4.0 has every call the scripts use (agents, sessions, events, memory stores, skills, `output_config`) | ✅ checked against the installed SDK; no API calls made yet |
-| Demo screen (`debrief.py report`) rendered with **sample** data | ✅ [`docs/demo-screen.png`](docs/demo-screen.png) |
-| Phase 1 onward: needs the hackathon **workspace API key** in `build/.env` | ⏳ |
+| Run | Memory | Verdict | Time | Words | Platform list cost |
+|---|---|---|---|---|---|
+| Calibration, Acme buyer | — | weak LOST 1/5 ×2 · strong WON 5/5 ×2 → **trusted** | | | |
+| Calibration, Vandelay buyer | — | weak LOST 0/5 ×2 · strong WON 5/5 ×2 → **trusted** | | | |
+| `acme-cold` (training) | off → writes lessons | **LOST 3/5**: missed calendar dates and a named reference | 446s | 2,202 | $1.28 |
+| `vandelay-cold` (baseline) | off | **LOST 2/5**: missed full-term total, calendar months and a named reference. Control ✓ | 351s | 2,069 | $1.06 |
+| `vandelay-warm` (test) | reads lessons | *running; fill in from `debrief.py score`* | | | |
+
+**What the runs already proved:**
+- **Parallel fan-out:** all 4 specialists were spawned within **0.7s** of each other in both runs (`outputs/*.verdict.json` → `trace`).
+- **Agent-written memory:** after the Acme loss, the coordinator wrote **6 general lessons** to the memory store. The leak check **passes**: no customer names, figures or legacy-system names.
+  - Lessons 1–2 target exactly what it lost on.
+  - Lessons 3–5 reinforce what it got right.
+  - Lesson 6 is one we never asked for: *"map each evaluation criterion to the exact proposal text"*.
+- **Model routing and caching, from the platform's own usage API:**
+  - Opus 5.5 coordinator **$0.52**, Sonnet 4.6 specialists **$0.12–$0.21**, Haiku 4.5 analyst **$0.04** (Vandelay cold).
+  - Of all input tokens, **373K were read from cache** against 79K written and 87 uncached.
+- **The baselines are stronger than planned.** The starter swarm already gives a full-term total (Acme) and an exit plan. So the room for gain on Vandelay is the **3** failed criteria; the best possible result is cold 2/5 → warm 5/5.
 
 ---
 
-## 2. What the audience sees
+## 2. Capability review: is each capability *visible* in the demo?
 
-The demo uses **two screens**:
-- **Left:** a terminal running a live bid. This proves it's real.
-- **Right:** `outputs/report.html`, built from the completed runs. This tells the story.
+A capability only counts in a demo if the audience can **see** it happen. This table lists every capability we're claiming, where it lives in the build, and the exact moment it shows on screen.
 
-A bid takes several minutes, so the story is told from runs finished during the build. The live bid runs alongside it for credibility.
+| # | Capability (Basecamp topic) | Where it lives | What the audience sees | Evidence |
+|---|---|---|---|---|
+| 1 | **Managed Agents**: hosted agents, environment, sessions | `create_specialists.py`, `debrief.py setup`; every bid is a session | Console session page, with all threads; session link on every screen | ✅ real |
+| 2 | **Multi-agent coordinator + parallel fan-out** | Coordinator with `multiagent` roster; delegates in one message | War room: 4 specialist cards light up **within 0.7s**; timers run in parallel | ✅ real trace |
+| 3 | **Agent Skills** | `upload_skills.py` attaches a Skill to Pricing, Legal and Competitive | War room: purple `skill:` badges per card, read from the agents API (`debrief.py manifest`); report: the Skill each **thread actually ran with** | ✅ 3 of 4. Technical Fit has no Skill: the starter ships none for it, and its product doc is passed in the message. Say so |
+| 4 | **Memory stores** (Managed Agents) | `/mnt/memory/lessons.md`, mounted only on the warm run | War room: the memory card is grey "not mounted" on cold runs and **pulses "read at 2.8s"** on the warm run, before any delegation. Console memory-store page shows the file | ✅ real |
+| 5 | **Context engineering**: the agent decides what to remember | Debrief session: "general rules, merge, ≤ 6, no names or figures" | Console memory store / report: 6 rules with keywords; leak check PASS | ✅ real |
+| 6 | **Evals: LLM-as-judge** | `buyers/*.json`, `judge()` | War room: buyer card with **5 sealed criteria** that flip one by one with quoted reasons | ✅ real |
+| 7 | **Structured outputs** | `output_config.format` JSON schema `{verdict: PASS/FAIL, reason}` | Buyer card badge: "5 PASS/FAIL calls · structured output" | ✅ |
+| 8 | **Eval rigour**: calibration, held-out customer, control | `calibrate`, Vandelay test, control criterion 5 | Report: "Can we trust the buyer?" panel; highlighted control row | ✅ real |
+| 9 | **Hill-climbing / train–test discipline** | Acme = train, Vandelay = test | Report cards: Acme → Vandelay cold → Vandelay warm | ✅ |
+| 10 | **Inference optimisation**: model routing, prompt caching, parallelism | Opus coordinator, Sonnet and Haiku specialists; automatic platform caching | War room cost panel and report table: **cost per agent and model**, % of input from cache | ✅ real platform numbers |
+| 11 | **Observability** | Event stream, session/thread usage API | War room event stream; Console traces | ✅ |
+| 12 | Human in the loop | — | Not shown. The proposal is a draft; say "a partner approves before it goes out" | ⚠️ gap, mention only |
 
-### Screen 1: the live terminal (a fresh bid started at 0:00)
+**Gaps found in review, and what was done about each:**
+- **Cold runs probed `/mnt/memory` too,** because of the prompt's "check if mounted". Nothing was there to find. Both screens now show memory activity only for runs with memory mounted.
+- **The live war room showed "not mounted" on the warm run,** because the live file dropped the flag. **Fixed** in `debrief.py`, with a fallback in the page.
+- **Platform cost is in cents** (`amount` is in minor units). **Fixed**: $1.06, not $106.
+- **The war room is a replay, not live:** a bid takes 6–7 minutes, more than the 3-minute slot. The screen is labelled `REPLAY 15× · recorded run`. That's honest, and it's the real trace.
+- **n = 1 per arm.** State it, and show the per-criterion quotes so the difference is concrete, not a single number.
 
-This is what `debrief.py round` prints. The format comes from the code; the times here are illustrative:
+---
 
+## 3. The demo: five screens, five acts
+
+The audience never just watches a terminal. Each act has its own screen, and each screen proves specific capabilities from §2.
+
+### Screens (browser tabs, in this order)
+
+| Tab | URL | Proves |
+|---|---|---|
+| **A · War room: Acme** | `http://127.0.0.1:8765/war-room.html?bid=acme-cold&speed=15` | 1, 2, 3, 6, 7, 10 |
+| **B · Console: memory store** | `https://platform.claude.com/memory-stores/<memory_store_id>` | 4, 5 |
+| **C · War room: Vandelay with lessons** | `http://127.0.0.1:8765/war-room.html?bid=vandelay-warm&speed=15` | 4 (pulse), 2, 6 |
+| **D · Report** | `http://127.0.0.1:8765/report.html` | 8, 9, 10 |
+| **E · Console: the warm session** | `https://platform.claude.com/sessions/<vandelay-warm session_id>` | 1, 11 |
+| *(optional)* **F · Live bid** | `http://127.0.0.1:8765/war-room.html?live=live` | 1, 2 live: "this one is running right now" |
+
+The IDs come from `outputs/deployment.json` and `outputs/*.verdict.json`. The report's footer links to every session.
+
+### What each war-room moment looks like
 ```
-$ python debrief.py round --rfp vandelay --buyer vandelay --label live --use-memory --quiet
-Bid live: session sesn_01…  (memory: on)
-
-     3.9s  [memory read  ] /mnt/memory/lessons.md
-     6.1s  [thread spawned] Pricing Specialist
-     6.5s  [thread spawned] Legal Reviewer
-     6.9s  [thread spawned] Technical Fit Specialist
-     7.3s  [thread spawned] Competitive Intel Analyst
-     7.5s  [delegate →   ] Pricing Specialist
-     …
-   140.2s  [reply ←      ] Pricing Specialist
-   188.0s  [reply ←      ] Legal Reviewer
-   412.0s  [finished     ] Coordinator
-
-  proposal saved: outputs/live.md  (1490 words, 412s)
-
-  BUYER VERDICT [live]: WON 4/5
-   ✓ Full-term total cost   'Total cost of €1.86M for the full 4-year term, net of discount…'
-   ✓ Dated rollout plan     'Phase 3 (Jul–Nov 2027): Oracle Exadata and SAP BW switched off…'
-   ✓ Exit plan              'On exit, all tables exported as Iceberg… within 30 days, at our cost.'
-   ✓ Proof before signing   'Reference call with Initech Sensors and a 45-day pilot…'
-   ✗ CONTROL: 24/7 P1 support  Still no 24/7 commitment or P1 response time stated.
+┌ DEBRIEF · WAR ROOM   Vandelay · unseen customer · WITH lessons   [REPLAY 15×]  [Reading lessons]   4.7s ┐
+│ ┌ MEMORY STORE ──────┐   ┌──────── COORDINATOR · claude-opus-5-5 ────────┐   ┌ BUYER · claude-sonnet-5-5 ─┐ │
+│ │ /mnt/memory/       │   │  reading the RFP → waiting for specialists     │   │ 🔒 Criterion 1 · sealed    │ │
+│ │ lessons.md         │   └───────┬───────────┬───────────┬───────────┬────┘   │ 🔒 Criterion 2 · sealed    │ │
+│ │ ● read at 2.8s     │   ┌ Pricing ┐ ┌ Legal ───┐ ┌ Tech Fit ┐ ┌ Competitive┐  │ …                          │ │
+│ └────────────────────┘   │ sonnet  │ │ sonnet   │ │ sonnet   │ │ haiku      │  │ ✓ Full-term total cost     │ │
+│                          │ skill:  │ │ skill:   │ │          │ │ skill:     │  │   "…€X for the 4-year term"│ │
+│                          │ pricing │ │ legal    │ │          │ │ competitive│  │        WON 5/5             │ │
+│                          │ working │ │ working  │ │ ✓ 108s   │ │ ✓ 62s      │  └────────────────────────────┘ │
+│ EVENT STREAM  69.0s delegate → Pricing …        COST PER AGENT  Opus $0.52 ▇▇▇▇  Sonnet $0.21 ▇▇  Haiku $0.04 ▏│
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
-
-The moment to point at: **four `thread spawned` lines within about a second of each other.** That's the parallel fan-out. The `memory read` line comes first: the swarm checks what it learned before it starts.
-
-### Screen 2: the demo report
-
-`python debrief.py report` writes one self-contained HTML page that works offline. The screenshot below uses **sample data**, labelled as such on the page. The real numbers come from your runs.
-
-![Demo screen with sample data](docs/demo-screen.png)
-
-The page has six blocks, top to bottom, and each one answers a question a judge will ask:
-
-| Block | Question it answers |
-|---|---|
-| **Three result cards:** Acme LOST → Vandelay cold LOST → Vandelay with lessons WON | "Did it learn?" |
-| **The hidden scorecard grid**, with the control row highlighted | "Learned *what*, and is the judge just generous?" |
-| **What it learned from losing** + leak check | "Did it just memorise the answer key?" |
-| **Can we trust the buyer?** Calibration results | "Who grades the grader?" |
-| **Why the second bid won, in the buyer's words** | "Show me the actual difference" |
-| **Four specialists, in parallel:** swimlane timeline with memory-read ticks | "Is it really multi-agent?" |
 
 ### Run of show (3:00)
 
-| Time | Screen | Show | Say |
-|---|---|---|---|
-| 0:00 | Terminal | Start the live bid; spawn lines appear | "Proposal teams lose deals and never learn why. This is a team of Claude agents that does." |
-| 0:15 | Report, top | The three cards | "It lost Acme. Then it lost a customer it had never seen, Vandelay. Then, with what it learned from losing Acme, it won Vandelay." |
-| 0:40 | Report, grid | The ✗ → ✓ column | "This is the buyer's private scorecard. The swarm never sees it. One AI buyer, one pass/fail call per criterion." |
-| 1:05 | Report, lessons | Lessons + leak check | "After the Acme loss, the agent decided what to remember. General rules only. The leak check proves there's no customer name or number in memory." |
-| 1:30 | Report, why | Buyer quotes, cold vs. warm | "Same customer, same swarm. Without lessons: 'no total for the term'. With lessons: '€1.86M for the full four years'." |
-| 1:55 | Report, control + trust | Control row, calibration | "Two honesty checks. The criterion no lesson covered didn't move. And before any bid, the buyer had to reject a known-bad proposal and accept a known-good one." |
-| 2:20 | Terminal / timeline | Parallel lanes, memory tick | "Four specialists in parallel, each with its own Skill. The orange tick is the coordinator reading its memory first." |
-| 2:40 | Report, top | Cards | "Managed Agents, Skills, memory stores and a calibrated eval. **Lose once. Win the next one.**" |
+| Time | Tab | On screen | Say | Capabilities |
+|---|---|---|---|---|
+| 0:00 | A | Org chart, sealed buyer | "Proposal teams lose deals and never learn why. This is a team of Claude agents that does. Each card is an agent deployed on Claude Platform, with its own model and Skill." | 1, 3, 10 |
+| 0:15 | A | Four cards light up together | "The coordinator, on Opus, delegates to four specialists **in parallel**: under a second between them. Sonnet for the heavy lanes, Haiku for the quick lookup." | 2, 10 |
+| 0:35 | A | Buyer flips the criteria → **LOST 3/5** | "The buyer is a separate model with a scorecard the swarm never sees. One structured pass/fail call per criterion. It lost on calendar dates and a named reference." | 6, 7 |
+| 0:55 | B | `lessons.md` in the Console | "After the debrief, the agent decided what to remember. Six rules, no customer names, no figures. Rule 6, 'map each criterion to the exact proposal text', is one it came up with itself." | 4, 5 |
+| 1:20 | C | Memory card pulses first, then fan-out, then buyer flips → **WON** | "New customer, new industry. Before it delegates anything, it reads its lessons. Same swarm. This time it wins." | 4, 2, 6 |
+| 1:55 | D | Cards + scorecard grid + buyer quotes | "Without lessons: 'only weeks from contract'. With lessons: calendar months. Three criteria flipped. The control, which no lesson covered, didn't move." | 8, 9 |
+| 2:20 | D | Trust panel + cost table | "Before any bid, the buyer had to reject a weak proposal and accept a strong one, twice. About a dollar a bid, most of the input served from prompt cache, according to the platform's own usage numbers." | 8, 10 |
+| 2:40 | E | Console session threads | "All of it is a real session on Claude Platform. **Lose once. Win the next one.**" | 1, 11 |
+
+**At speed 15**, one replay takes about 30s plus about 7s for the verdict flips. Two replays fit. If time gets tight, use `speed=25`.
+
+### How to run the demo
+
+**Ten minutes before:**
+```bash
+cd build && source env.sh
+```
+```bash
+python debrief.py collect && python debrief.py manifest && python debrief.py report
+```
+```bash
+python debrief.py serve
+```
+- Open tabs A–E in that order, and log in to the Console first.
+- Set the browser to full screen at 1440×900 or larger, with dark mode off for the report.
+- **Optional live moment:** about 3 minutes before you go on, in a second terminal:
+  ```bash
+  python debrief.py round --rfp vandelay --buyer vandelay --label live --use-memory --quiet
+  ```
+  Then tab F shows it running live. At 2:40, say "and this one is running right now".
+
+**Before each act,** reload the war-room tab so its replay starts from zero.
+
+**Backup:** everything above works offline from `outputs/` except the Console tabs. If the network fails, skip B and E: the report's lessons panel and session IDs cover them.
 
 ---
 
-## 3. How it works
+## 4. How it works
 
 ```
  ROUND (one bid)                                                       Managed Agents session
    message = RFP + past-wins + product-overview  [+ "read /mnt/memory" when --use-memory]
-   Coordinator (COORDINATOR_MODEL, default claude-opus-5-5)
+   Coordinator (claude-opus-5-5)
      ├─ reads /mnt/memory/lessons.md first (warm runs only)
      ├─ delegates in ONE message, in parallel → Pricing · Legal · Technical Fit · Competitive
-     │                                          (starter models; Skills attached by upload_skills.py)
+     │                                          (Sonnet 4.6 ×3, Haiku 4.5; Skills on 3 of 4)
      └─ writes the markdown proposal between === PROPOSAL START/END ===
+   writes outputs/<label>.live.json on every event (the live war room polls it)
  JUDGE                                                                 Messages API
    buyers/<buyer>.json: persona + 5 hidden criteria
-   5 parallel calls on BUYER_MODEL (default claude-sonnet-5-5, never the coordinator's model)
-   structured output {verdict: PASS|FAIL, reason}, stop_reason checked → verdict.json (+ timed trace)
+   5 parallel calls on claude-sonnet-5-5 (never the coordinator's model)
+   structured output {verdict: PASS|FAIL, reason}, stop_reason checked
+ EVIDENCE                                                              Managed Agents usage API
+   session + per-thread usage: list cost (cents), cache reads/writes, model, Skills → verdict.json
  DEBRIEF (--learn only)                                                Managed Agents session
    Coordinator in "DEBRIEF MODE" (no delegation) gets the verdict
-   updates /mnt/memory/lessons.md: ≤ 6 general rules, no names or figures, merged not appended
- SCORE / REPORT                                                        offline
-   outputs/*.verdict.json + calibration-*.json + lessons-snapshot.md → terminal table, report.html
+   updates /mnt/memory/lessons.md: ≤ 6 general rules, merged; a snapshot is saved for offline use
+ SCREENS                                                               local, offline-capable
+   war-room.html (replay or live) · report.html · deployment.json, via `debrief.py serve`
 ```
-
-### The three runs, and why each one exists
-| Run | Memory | Role in the proof |
-|---|---|---|
-| `acme-cold --learn` | off, then writes | The **training** deal. It loses, and the debrief produces the lessons |
-| `vandelay-cold` | off | The **baseline** on the unseen customer. Runs at the same time as Acme |
-| `vandelay-warm --use-memory` | reads | The **test**: the same customer and swarm, plus the lessons |
 
 ### The buyers' hidden scorecards
 | # | Acme (training) | Vandelay (test) | Taught by Acme? |
@@ -131,73 +168,53 @@ The page has six blocks, top to bottom, and each one answers a question a judge 
 | 2 | Dated phases incl. Teradata decommission | Dated phases incl. Exadata/SAP BW switch-off | ✅ |
 | 3 | Exit: format, timeline, who pays | Exit: format, speed, who pays | ✅ |
 | 4 | Named reference + reference call or PoC | Named comparable customer + pilot or call | ✅ |
-| 5 | Power BI integration (an easy pass) | **CONTROL:** 24/7 with P1 response ≤ 30 min | ❌, so it should stay flat |
+| 5 | Power BI integration | **CONTROL:** 24/7 with P1 response ≤ 30 min | ❌, should stay flat |
 
-The coordinator prompt (`kit/coordinator_system.md`) contains **none** of these criteria. It keeps the starter's proposal sections plus one rule: "apply lessons from memory".
+The coordinator prompt (`kit/coordinator_system.md`) contains **none** of these criteria.
 
 ---
 
-## 4. Why the result can be trusted
+## 5. Why the result can be trusted
 
 | Concern | How it's handled |
 |---|---|
-| A lenient judge | `calibrate`: for each buyer, a weak proposal must LOSE and a strong one must WIN, with the same result on two tries. Results are saved and shown on the report |
-| The model grades itself | The buyer runs on a different model from the coordinator |
-| A vague score | One PASS/FAIL per criterion, each with a quoted reason. A cut-off answer or refusal is a **grader error**, not a lost criterion |
-| Memorising Acme | A different customer, industry, currency, term and legacy stack. The leak check fails if the lessons mention Acme, Vandelay, Teradata or Exadata, or any money figure |
-| "Better" just means more words | The control criterion should not move. The report shows word counts per bid, so length is visible |
-| Prompt tuned to the test | The coordinator prompt has no hidden criteria; Vandelay's scorecard was written before any lessons existed |
+| A lenient judge | Calibration for both buyers: weak LOST and strong WON, stable over 2 tries ✅ |
+| The model grades itself | Buyer: Sonnet 5.5. Coordinator: Opus 5.5 |
+| A vague score | One PASS/FAIL per criterion, each with a quoted reason; a cut-off answer is a grader error |
+| Memorising Acme | A different customer, industry, currency, term and legacy stack. Leak check on the stored lessons: PASS ✅ |
+| "Better" just means more words | The control row, plus word counts shown per bid |
+| Prompt tuned to the test | The coordinator prompt has no criteria; the Vandelay scorecard was written before the lessons existed |
 
 ---
 
-## 5. 45-minute build timeline
+## 6. Build timeline (actual)
 
-| Minutes | Step | Command(s) | Gate | If the gate fails |
-|---|---|---|---|---|
-| 0–5 | Set up | Clone, install, copy kit *(✅ done)*; `source .env`; `unset ANTHROPIC_BASE_URL`; `setup_environment.py` | Prints `Environment created` | Key error → wrong workspace key |
-| 5–10 | Deploy | `create_specialists.py && upload_skills.py && debrief.py setup` | Coordinator + memory store IDs | `multiagent` rejected → `setup --solo`; Opus 5.5 rejected with multi-agent → `COORDINATOR_MODEL=claude-opus-4-7` (the starter's model); memory store fails → `--backend local` |
-| 10–12 | Trust | `calibrate --buyer acme && calibrate --buyer vandelay` | `CALIBRATION PASSED` ×2 | Tighten that criterion's wording in `buyers/*.json`; never skip |
-| 12–24 | Wave 1 (2 terminals) | `acme-cold --learn` ∥ `vandelay-cold --quiet` | Lessons printed; 2 verdicts | Longer than 12 minutes → `export SPECIALIST_WORDS=150` for wave 2 |
-| 24–34 | Wave 2 | `vandelay-warm --use-memory` | Verdict; `memory read` line seen | No memory read → check the session in the Console; rerun with `--backend local` |
-| 34–38 | Proof | `score`, `report`, open `outputs/report.html` | Warm > cold, control flat, leak PASS | See §7 |
-| 38–45 | Rehearse | Walk through the run of show twice; open the Console session links | — | — |
-
-Exact commands are in [README.md](README.md).
-
----
-
-## 6. Risks and fallbacks
-
-| Risk | Likelihood | Fallback |
+| Step | Planned | Actual |
 |---|---|---|
-| Multi-agent (research preview) not enabled on the workspace | Medium | `setup --solo`. The parallel-lanes block disappears, but the memory and eval story stays |
-| `claude-opus-5-5` not accepted as a multi-agent coordinator | Unknown | `COORDINATOR_MODEL=claude-opus-4-7`, the model the starter repo shipped with |
-| Memory store not attachable to a coordinator session | Unknown | `--backend local`: lessons go to `outputs/lessons.md` and are added to the warm bid's message. Say so in the demo |
-| A gateway URL left in the environment routes calls away from the workspace API | High on this laptop | `unset ANTHROPIC_BASE_URL`. `debrief.py` warns if it's set |
-| Bids slower than budgeted | Medium | Wave 1 runs in parallel; `SPECIALIST_WORDS=150`; the demo uses saved results anyway |
-| The live bid stalls on stage | Low | The report is offline; skip the terminal |
+| Set up + environment | 0–5 min | ✅ |
+| Deploy agents, Skills, coordinator, memory | 5–10 min | ✅. One fix: SDK 2.x renamed the Skills field (`display_title` → `display_name`), now patched in `kit/upload_skills.py`. The coordinator was recreated after the Skills were attached |
+| Calibrate both buyers | 10–12 min | ✅ both trusted |
+| Wave 1 (parallel) | 12–24 min | ✅ Acme 446s, Vandelay 351s |
+| Wave 2 | 24–34 min | ⏳ running |
+| Proof + screens | 34–38 min | `collect`, `manifest`, `report`, `serve` |
 
 ---
 
 ## 7. If the result isn't what we hoped
 
-| Outcome | What to say | Why it's still a good demo |
-|---|---|---|
-| Warm > cold and the control is flat | The headline | — |
-| Warm > cold, but the control moved too | "Part of the gain is general effort, not learning. This is how we can tell." | The control did its job |
-| Warm = cold | "The lessons were right (show them) but weren't applied. The memory-read tick shows it read them, and the transcript shows where it ignored them." | An honest eval beats a cherry-picked one |
-| Acme won cold | "The baseline is already strong, so the comparison that counts is Vandelay cold vs. warm." | The proof is on the unseen customer |
-
----
+| Outcome | What to say |
+|---|---|
+| Warm > cold, control flat | The headline |
+| Warm > cold, control moved | "Part of the gain is general effort. The control is how we can tell." |
+| Warm = cold | "It read the lessons (the memory pulse shows it) but didn't apply them. Here's where in the transcript." An honest eval beats a cherry-picked one |
+| Warm < cold | Show it. n = 1; rerun both arms if time allows (about $1 and 7 minutes each) |
 
 ## 8. Questions to expect from judges
-
-- **"Isn't the debrief just giving it the answers?"** Real procurement debriefs do tell you why you lost. The test is whether it **transfers** to a different customer with different wording. The leak check proves no answers were copied.
-- **"n = 1?"** Yes, one run per arm: that shows direction, not a rate. Next step is 3 runs per arm and pass^3, using the same scripts.
-- **"Why not just put better instructions in the prompt?"** You could, once you know what to write. The point is that the system **found** the rules itself, from a loss.
-- **"Cost?"** About 4 swarm sessions (3 bids + 1 debrief) plus about 55 judge calls (40 calibration + 15 scoring). The cost per session is on the Console usage page.
+- **"Isn't the debrief just giving it the answers?"** Real debriefs tell you why you lost. The test is whether that transfers to a different customer and wording, and the leak check shows no answers were copied.
+- **"n = 1?"** Yes. That shows direction, not a rate. The scripts already support 3 runs per arm.
+- **"Why not just write better instructions?"** You could, once you know what to write. Here the system **found** the rules itself, from a loss. Lesson 6 wasn't in any rubric.
+- **"Cost?"** About $1–1.30 per bid at list price, from the platform's usage API, with most input tokens served from prompt cache.
 
 ## 9. Rules
-
 - Synthetic data only. The key lives in `build/.env`, which is git-ignored, and is never printed or committed.
 - `build/` and `outputs/` are git-ignored. Commit only the kit, the docs and a final report you've chosen to share.

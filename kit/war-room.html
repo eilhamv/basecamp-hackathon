@@ -1,0 +1,187 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Debrief · War room</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0f1115;color:#e8e6e1;font:16px/1.4 -apple-system,Segoe UI,Helvetica,Arial,sans-serif}
+header{display:flex;align-items:center;gap:18px;padding:14px 26px;border-bottom:1px solid #23262d}
+header h1{font-size:22px;margin:0;letter-spacing:.04em}
+header .bid{font-size:18px;color:#c9c5bb}
+.pill{padding:4px 12px;border-radius:99px;font-size:13px;font-weight:700;letter-spacing:.04em}
+.mode{background:#2a2f3a;color:#9fb2ff}.phase{background:#1f3a2b;color:#7ee2a8}
+.clock{margin-left:auto;font:600 28px ui-monospace,Menlo,monospace;color:#fff}
+main{display:grid;grid-template-columns:270px 1fr 380px;gap:20px;padding:22px 26px}
+.card{background:#171a21;border:1px solid #2a2e37;border-radius:14px;padding:14px 16px;transition:all .35s}
+.k{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:#8b8f99}
+.name{font-size:18px;font-weight:700;margin:2px 0 8px}
+.badge{display:inline-block;font:600 11px ui-monospace,Menlo,monospace;padding:2px 7px;border-radius:6px;margin:2px 4px 2px 0;background:#232733;color:#aab3c5}
+.badge.skill{background:#2b2340;color:#c8b6ff}.badge.model{background:#1e2c3a;color:#8fc7ff}
+.status{margin-top:8px;font:600 14px ui-monospace,Menlo,monospace;color:#8b8f99}
+.working{border-color:#5b7cfa;box-shadow:0 0 0 1px #5b7cfa,0 0 26px rgba(91,124,250,.35)}
+.working .status{color:#9fb2ff}
+.done{border-color:#2f9e5e}.done .status{color:#7ee2a8}
+.org{display:flex;flex-direction:column;align-items:center}
+.coord{width:420px;text-align:center}
+.fan{width:78%;height:28px;border:2px solid #2a2e37;border-bottom:none;border-radius:12px 12px 0 0;margin-top:14px;transition:border-color .35s}
+.fan.on{border-color:#5b7cfa}
+.specs{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;width:100%}
+.mem.pulse{border-color:#f0a440;box-shadow:0 0 0 1px #f0a440,0 0 30px rgba(240,164,64,.45)}
+.mem .file{font:13px ui-monospace,Menlo,monospace;color:#f0c27a;margin-top:6px}
+.crit{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-top:1px solid #23262d;font-size:14px}
+.crit .m{width:26px;text-align:center;font-size:18px;font-weight:800}
+.crit.sealed{color:#5f636c}.p .m{color:#5fd38f}.f .m{color:#ff6b5b}
+.crit .why{color:#a7a39a;font-size:12.5px;margin-top:2px}
+.result{font-size:52px;font-weight:900;text-align:center;margin:10px 0 2px;opacity:0;transition:opacity .5s}
+.result.show{opacity:1}.won{color:#5fd38f}.lost{color:#ff6b5b}
+.log{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.events{font:13px ui-monospace,Menlo,monospace;color:#a7a39a;height:150px;overflow:hidden}
+.events div{padding:2px 0}.events b{color:#e8e6e1}
+.cost .row{display:grid;grid-template-columns:190px 1fr 70px;gap:8px;align-items:center;font-size:13px;margin:4px 0}
+.cost .bar{height:12px;border-radius:4px;background:#5b7cfa}
+.small{color:#8b8f99;font-size:12px}a{color:#9fb2ff}
+</style></head>
+<body>
+<header>
+  <h1>DEBRIEF · WAR ROOM</h1><span class="bid" id="bid"></span>
+  <span class="pill mode" id="mode"></span><span class="pill phase" id="phase">Waiting</span>
+  <span class="clock" id="clock">0.0s</span>
+</header>
+<main>
+  <section>
+    <div class="card mem" id="mem"><div class="k">Memory store · Claude Platform</div>
+      <div class="name">Lessons from past bids</div>
+      <div class="file">/mnt/memory/lessons.md</div>
+      <div class="status" id="memstatus">–</div></div>
+    <div class="card" style="margin-top:16px"><div class="k">Deployed on Claude Platform</div>
+      <div class="small" id="deployed" style="margin-top:6px">Managed Agents · multi-agent coordinator · Skills · memory store</div></div>
+  </section>
+  <section class="org">
+    <div class="card coord" id="coord"><div class="k">Coordinator</div><div class="name" id="coordname">Senior Partner</div>
+      <div id="coordbadges"></div><div class="status" id="coordstatus">reading the RFP</div></div>
+    <div class="fan" id="fan"></div>
+    <div class="specs" id="specs"></div>
+  </section>
+  <section>
+    <div class="card" id="buyer"><div class="k">Buyer · separate model · hidden scorecard</div>
+      <div class="name" id="buyername">Head of Procurement</div><div id="buyerbadges"></div>
+      <div id="crits" style="margin-top:8px"></div>
+      <div class="result" id="result"></div></div>
+  </section>
+  <section class="log">
+    <div class="card"><div class="k">Event stream</div><div class="events" id="events"></div></div>
+    <div class="card cost"><div class="k">Cost per agent (from the platform's usage API)</div><div id="cost"><div class="small" style="margin-top:8px">Appears when the bid finishes.</div></div></div>
+  </section>
+</main>
+<p class="small" style="padding:0 26px 18px" id="links"></p>
+<script>
+const q = new URLSearchParams(location.search);
+const LIVE = q.get("live"), LABEL = LIVE || q.get("bid") || "vandelay-warm", SPEED = +(q.get("speed") || 15);
+const $ = id => document.getElementById(id);
+const get = async u => { const r = await fetch(u + "?t=" + Date.now()); if (!r.ok) throw new Error(u); return r.json(); };
+const DEFAULT = {coordinator: {name: "Debrief Coordinator", model: "claude-opus-5-5", skills: []}, buyer_model: "claude-sonnet-5-5",
+  specialists: ["Pricing Specialist", "Legal Reviewer", "Technical Fit Specialist", "Competitive Intel Analyst"].map(n => ({name: n, model: "", skills: []}))};
+const badges = a => `<span class="badge model">${a.model || "model"}</span>` + (a.skills || []).map(s => `<span class="badge skill">skill: ${s}</span>`).join("");
+const cards = {}, started = {}; let simT = 0, t0 = performance.now(), applied = 0, memMounted = false, finished = false, verdictShown = false;
+
+function phase(p) { $("phase").textContent = p; }
+function log(t, txt) { const d = document.createElement("div"); d.innerHTML = `<b>${t.toFixed(1).padStart(6)}s</b>  ${txt}`;
+  $("events").prepend(d); }
+
+function setup(dep, meta) {
+  $("bid").textContent = {"acme-cold": "Acme · training deal · no lessons", "vandelay-cold": "Vandelay · unseen customer · no lessons",
+    "vandelay-warm": "Vandelay · unseen customer · WITH lessons"}[LABEL] || LABEL;
+  $("mode").textContent = LIVE ? "LIVE" : `REPLAY ${SPEED}× · recorded run`;
+  $("coordname").textContent = dep.coordinator.name; $("coordbadges").innerHTML = badges(dep.coordinator);
+  $("buyerbadges").innerHTML = `<span class="badge model">${dep.buyer_model}</span><span class="badge">5 PASS/FAIL calls · structured output</span>`;
+  $("specs").innerHTML = dep.specialists.map((s, i) => `<div class="card" id="s${i}"><div class="k">Specialist</div>
+    <div class="name" style="font-size:15px">${s.name}</div>${badges(s)}<div class="status">idle</div></div>`).join("");
+  dep.specialists.forEach((s, i) => cards[s.name] = $("s" + i));
+  memMounted = meta.memory !== undefined ? !!meta.memory
+    : (q.get("memory") ? q.get("memory") === "1" : /warm/.test(LABEL));
+  $("memstatus").textContent = memMounted ? "mounted · waiting" : "not mounted (cold run)";
+  if (!memMounted) $("mem").style.opacity = .45;
+  $("crits").innerHTML = [1, 2, 3, 4, 5].map(i => `<div class="crit sealed" id="c${i}"><div class="m">🔒</div><div>Criterion ${i} · sealed</div></div>`).join("");
+  $("coord").classList.add("working");
+  if (meta.session_id) $("links").innerHTML = `Session on Claude Platform: <a href="https://platform.claude.com/sessions/${meta.session_id}" target="_blank">${meta.session_id}</a>`;
+}
+
+function apply(e) {
+  const c = cards[e.agent];
+  if ((e.kind === "spawned" || e.kind === "delegated") && c && !started[e.agent]) {
+    started[e.agent] = e.t; c.classList.add("working"); $("fan").classList.add("on");
+    phase("Fan-out: specialists in parallel"); log(e.t, `delegate → <b>${e.agent}</b>`);
+    $("coordstatus").textContent = "waiting for specialists";
+  } else if (e.kind === "replied" && c) {
+    c.classList.remove("working"); c.classList.add("done");
+    c.querySelector(".status").textContent = `✓ replied · ${(e.t - (started[e.agent] || 0)).toFixed(0)}s`;
+    log(e.t, `reply ← <b>${e.agent}</b>`);
+    if (Object.values(cards).every(x => x.classList.contains("done"))) { phase("Coordinator writing the proposal"); $("coordstatus").textContent = "synthesising the proposal"; }
+  } else if (e.kind === "memory" && memMounted) {
+    $("mem").classList.add("pulse"); setTimeout(() => $("mem").classList.remove("pulse"), 1800);
+    $("memstatus").textContent = `read at ${e.t.toFixed(1)}s`; phase("Reading lessons from memory");
+    log(e.t, `<b>memory read</b> /mnt/memory/lessons.md`);
+  } else if (e.kind === "done") {
+    finished = true; $("coord").classList.remove("working"); $("coord").classList.add("done");
+    $("coordstatus").textContent = `✓ proposal written · ${e.t.toFixed(0)}s`; phase("Buyer scoring"); log(e.t, "<b>proposal → buyer</b>");
+  }
+}
+
+function tickTimers() {
+  for (const [name, c] of Object.entries(cards))
+    if (c.classList.contains("working")) c.querySelector(".status").textContent = `working · ${(simT - started[name]).toFixed(0)}s`;
+  $("clock").textContent = simT.toFixed(1) + "s";
+}
+
+function showVerdict(v) {
+  if (verdictShown) return; verdictShown = true;
+  v.criteria.forEach((r, i) => setTimeout(() => {
+    const el = $("c" + (i + 1)); const ok = r.verdict === "PASS";
+    el.className = "crit " + (ok ? "p" : "f");
+    el.innerHTML = `<div class="m">${ok ? "✓" : "✗"}</div><div><b>${r.name.replace("CONTROL: ", "control · ")}</b><div class="why">${r.reason.slice(0, 150)}${r.reason.length > 150 ? "…" : ""}</div></div>`;
+  }, 1100 * (i + 1)));
+  setTimeout(() => {
+    const el = $("result"); el.className = "result show " + (v.won ? "won" : "lost");
+    el.textContent = `${v.won ? "WON" : "LOST"} ${v.passed}/${v.total}`; phase("Verdict");
+    showCost(v);
+  }, 1100 * 6);
+}
+
+function showCost(v) {
+  const th = (v.threads || []).filter(t => t.cost != null);
+  if (!th.length) { $("cost").innerHTML = '<div class="small" style="margin-top:8px">Run <code>debrief.py collect</code> to add platform cost.</div>'; return; }
+  const max = Math.max(...th.map(t => t.cost)), u = v.usage || {};
+  const share = (u.cache_read_tokens || 0) / Math.max(1, (u.cache_read_tokens || 0) + (u.input_tokens || 0) + (u.cache_write_tokens || 0));
+  $("cost").innerHTML = th.sort((a, b) => b.cost - a.cost).map(t => `<div class="row"><div>${t.agent}<br><span class="badge model">${t.model}</span></div>
+    <div class="bar" style="width:${Math.max(3, 100 * t.cost / max)}%"></div><div>$${t.cost.toFixed(3)}</div></div>`).join("") +
+    `<div class="small" style="margin-top:6px">Total $${(u.cost || 0).toFixed(2)} · ${(100 * share).toFixed(0)}% of input served from prompt cache</div>`;
+}
+
+async function main() {
+  const dep = await get("deployment.json").catch(() => DEFAULT);
+  if (!LIVE) {                                     // REPLAY: the recorded trace, compressed in time
+    const v = await get(`${LABEL}.verdict.json`);
+    setup(dep, v); const trace = v.trace || []; const end = trace.length ? trace[trace.length - 1].t : 0;
+    const loop = () => {
+      simT = Math.min(end, (performance.now() - t0) / 1000 * SPEED);
+      while (applied < trace.length && trace[applied].t <= simT) apply(trace[applied++]);
+      tickTimers();
+      if (applied >= trace.length) { showVerdict(v); return; }
+      requestAnimationFrame(loop);
+    };
+    setTimeout(loop, 800);
+  } else {                                         // LIVE: poll the file the running bid writes
+    let meta = await get(`${LABEL}.live.json`).catch(() => ({trace: []}));
+    setup(dep, meta); let lastT = 0, lastPoll = performance.now();
+    const poll = async () => {
+      try { meta = await get(`${LABEL}.live.json`); } catch (e) {}
+      const tr = meta.trace || [];
+      if (applied < tr.length) { while (applied < tr.length) { apply(tr[applied]); lastT = tr[applied++].t; } lastPoll = performance.now(); }
+      if (meta.status === "done") { try { showVerdict(await get(`${LABEL}.verdict.json`)); return; } catch (e) {} }
+      setTimeout(poll, 1000);
+    };
+    const clock = () => { if (!finished) simT = lastT + (performance.now() - lastPoll) / 1000; tickTimers(); if (!verdictShown) requestAnimationFrame(clock); };
+    poll(); clock();
+  }
+}
+main();
+</script>
+</body></html>

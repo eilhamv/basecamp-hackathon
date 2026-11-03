@@ -10,7 +10,10 @@ create_specialists.py and upload_skills.py.
     python debrief.py round --rfp vandelay --buyer vandelay --label vandelay-warm --use-memory
     python debrief.py score                          # scoreboard + leak check
     python debrief.py lessons                        # what the swarm remembered
-    python debrief.py report                         # outputs/report.html, the demo screen
+    python debrief.py collect                        # platform cost/usage per agent into verdicts
+    python debrief.py manifest                       # outputs/deployment.json: agents, models, Skills
+    python debrief.py report                         # outputs/report.html, the proof screen
+    python debrief.py serve                          # http://127.0.0.1:8765/war-room.html (live/replay)
 
 Add --backend local to round/lessons/score if the memory store isn't available.
 The API key is read from ANTHROPIC_API_KEY only.
@@ -172,7 +175,8 @@ def cmd_calibrate(args) -> None:
 
 # --------------------------------------------------------------------------- sessions
 
-def stream_session(c: Anthropic, session_id: str, text: str, quiet: bool = False) -> tuple[str, list]:
+def stream_session(c: Anthropic, session_id: str, text: str, quiet: bool = False,
+                   live_path: Path | None = None, live_meta: dict | None = None) -> tuple[str, list]:
     """Send one user message and stream until the session goes idle.
 
     Returns the agent's text and a trace of timed events ({t, kind, agent}) for the report's
@@ -186,6 +190,9 @@ def stream_session(c: Anthropic, session_id: str, text: str, quiet: bool = False
         t = round(time.time() - t0, 1)
         trace.append({"t": t, "kind": kind, "agent": agent})
         print(f"  {t:>6.1f}s  [{label}] {agent}", flush=True)
+        if live_path:  # the war room polls this file in live mode
+            live_path.write_text(json.dumps({**(live_meta or {}), "status": "done" if kind == "done" else "running",
+                                             "session_id": session_id, "trace": trace}))
 
     with c.beta.sessions.events.stream(session_id) as stream:
         c.beta.sessions.events.send(
@@ -271,8 +278,12 @@ def cmd_round(args) -> None:
     session = c.beta.sessions.create(agent=coordinator_id, environment_id=environment_id,
                                      title=f"Debrief bid: {args.label}", resources=resources)
     print(f"Bid {args.label}: session {session.id}  (memory: {'on' if args.use_memory else 'off'})\n")
+    live = OUT / f"{args.label}.live.json"
+    live.write_text(json.dumps({"status": "running", "session_id": session.id, "memory": bool(args.use_memory),
+                                "trace": []}))
     t0 = time.time()
-    text, trace = stream_session(c, session.id, message, quiet=args.quiet)
+    text, trace = stream_session(c, session.id, message, quiet=args.quiet, live_path=live,
+                                 live_meta={"memory": bool(args.use_memory)})
     seconds = round(time.time() - t0)
     proposal = extract_proposal(text)
     (OUT / f"{args.label}.md").write_text(proposal)
@@ -281,11 +292,111 @@ def cmd_round(args) -> None:
     verdict = judge(c, args.buyer, proposal)
     verdict.update(label=args.label, rfp=args.rfp, memory=bool(args.use_memory), seconds=seconds,
                    words=len(proposal.split()), session_id=session.id, trace=trace)
+    verdict.update(collect_usage(c, session.id))
     (OUT / f"{args.label}.verdict.json").write_text(json.dumps(verdict, indent=2))
     print_verdict(verdict, args.label)
 
     if args.learn:
         debrief(c, verdict, args.backend, environment_id, coordinator_id)
+
+
+# --------------------------------------------------------------------------- platform evidence
+
+def _usage_dict(u) -> dict:
+    if u is None:
+        return {}
+    cc = getattr(u, "cache_creation", None)
+    cost = getattr(u, "list_cost", None)
+    return {
+        "cost": int(cost.amount) / 100 if cost is not None else None,  # amount is in minor units (cents)
+        "currency": str(getattr(cost, "currency", "")) if cost is not None else "",
+        "input_tokens": getattr(u, "input_tokens", None) or 0,
+        "output_tokens": getattr(u, "output_tokens", None) or 0,
+        "cache_read_tokens": getattr(u, "cache_read_input_tokens", None) or 0,
+        "cache_write_tokens": ((getattr(cc, "ephemeral_5m_input_tokens", 0) or 0) +
+                               (getattr(cc, "ephemeral_1h_input_tokens", 0) or 0)) if cc else 0,
+        "active_seconds": getattr(u, "active_seconds", None),
+    }
+
+
+def _skill_names() -> dict:
+    p = Path(".skill_ids.json")
+    return {v: k for k, v in json.loads(p.read_text()).items()} if p.exists() else {}
+
+
+def collect_usage(c: Anthropic, session_id: str) -> dict:
+    """Session + per-thread usage from the platform: real list cost, model and Skills per agent."""
+    try:
+        s = c.beta.sessions.retrieve(session_id)
+        names = _skill_names()
+        threads = []
+        for t in c.beta.sessions.threads.list(session_id=session_id):
+            a = t.agent
+            model = getattr(getattr(a, "model", None), "id", None) or getattr(a, "model", None)
+            skills = [names.get(getattr(k, "skill_id", ""), getattr(k, "skill_id", "")) for k in (getattr(a, "skills", None) or [])]
+            threads.append({"agent": getattr(a, "name", "?"), "model": str(model), "skills": skills,
+                            "parent": t.parent_thread_id, **_usage_dict(t.usage)})
+        return {"usage": _usage_dict(s.usage), "threads": threads}
+    except Exception as e:  # evidence is a bonus; never lose a bid over it
+        print(f"  (usage not collected: {type(e).__name__}: {e})", file=sys.stderr)
+        return {}
+
+
+def cmd_collect(args) -> None:
+    c = client()
+    for p in sorted(OUT.glob("*.verdict.json")):
+        v = json.loads(p.read_text())
+        if args.label and v["label"] != args.label:
+            continue
+        v.update(collect_usage(c, v["session_id"]))
+        p.write_text(json.dumps(v, indent=2))
+        u = v.get("usage", {})
+        print(f"{v['label']:<16} ${u.get('cost') or 0:.2f}  threads={len(v.get('threads', []))}  "
+              f"cache_read={u.get('cache_read_tokens', 0):,}")
+
+
+def cmd_manifest(args) -> None:
+    """What is deployed on Claude Platform: agents, models, Skills, memory store. For the war room."""
+    c = client()
+    ma = Anthropic(default_headers={"anthropic-beta": BETA})
+    names = _skill_names()
+
+    def agent_info(agent_id: str) -> dict:
+        a = ma.beta.agents.retrieve(agent_id)
+        model = getattr(getattr(a, "model", None), "id", None) or getattr(a, "model", None)
+        return {"id": a.id, "name": a.name, "model": str(model), "version": a.version,
+                "skills": [names.get(getattr(k, "skill_id", ""), getattr(k, "skill_id", "")) for k in (a.skills or [])]}
+
+    specialists = json.loads(need(".specialist_ids.json"))
+    manifest = {
+        "coordinator": agent_info(need(".coordinator_id")),
+        "specialists": [agent_info(i) for i in specialists.values()],
+        "memory_store_id": need(".memory_store_id"),
+        "environment_id": need(".environment_id"),
+        "buyer_model": BUYER_MODEL,
+    }
+    OUT.mkdir(exist_ok=True)
+    (OUT / "deployment.json").write_text(json.dumps(manifest, indent=2))
+    for a in [manifest["coordinator"], *manifest["specialists"]]:
+        print(f"  {a['name']:<28} {a['model']:<26} skills={a['skills'] or '-'}")
+    print(f"  memory store {manifest['memory_store_id']} · buyer {BUYER_MODEL}\nWrote outputs/deployment.json")
+
+
+def cmd_serve(args) -> None:
+    """Serve outputs/ on localhost so the war room can read the run files."""
+    import http.server
+    import shutil
+    import socketserver
+    OUT.mkdir(exist_ok=True)
+    shutil.copy("war-room.html", OUT / "war-room.html")
+    os.chdir(OUT)
+    base = f"http://127.0.0.1:{args.port}"
+    print(f"War room (replay):  {base}/war-room.html?bid=vandelay-warm&speed=15\n"
+          f"War room (live):    {base}/war-room.html?live=<label>\n"
+          f"Report:             {base}/report.html\nCtrl-C to stop.")
+    handler = lambda *a, **k: http.server.SimpleHTTPRequestHandler(*a, directory=".", **k)
+    with socketserver.TCPServer(("127.0.0.1", args.port), handler) as httpd:
+        httpd.serve_forever()
 
 
 DEBRIEF_RULES = (
@@ -507,12 +618,42 @@ def cmd_report(args) -> None:
                 '<div class="h">With lessons</div>' + "".join(why) + "</div>") if why else \
         '<p class="small">No criterion changed between the cold and warm bids.</p>'
 
+    def shown_trace(v):  # cold runs also probe /mnt/memory but nothing is mounted: don't draw a tick
+        return [e for e in v.get("trace", []) if e["kind"] != "memory" or v.get("memory")]
     lanes = "".join(f'<h3 style="margin:18px 0 6px;font-size:16px">{esc(titles.get(l, ("", l))[1])}</h3>'
-                    f'{_lanes(verdicts[l].get("trace", []), verdicts[l].get("seconds", 0))}'
+                    f'{_lanes(shown_trace(verdicts[l]), verdicts[l].get("seconds", 0))}'
                     for l in order if verdicts[l].get("trace"))
     links = " · ".join(f'<a href="https://platform.claude.com/sessions/{esc(verdicts[l]["session_id"])}">'
                        f'{esc(l)}</a>' for l in order if verdicts[l].get("session_id"))
     banner = f'<div class="banner">{esc(args.banner)}</div>' if args.banner else ""
+
+    # platform evidence: real cost, model and Skills per agent (from `collect`)
+    ev_rows = []
+    for l in order:
+        v = verdicts[l]
+        u = v.get("usage") or {}
+        if not v.get("threads"):
+            continue
+        cache_share = (u.get("cache_read_tokens", 0) /
+                       max(1, u.get("cache_read_tokens", 0) + u.get("input_tokens", 0) + u.get("cache_write_tokens", 0)))
+        ev_rows.append(f'<tr><td colspan="5" style="background:#faf9f6"><b>{esc(titles.get(l, ("", l))[1])}</b> · '
+                       f'total ${u.get("cost") or 0:.2f} · {cache_share:.0%} of input tokens served from prompt cache</td></tr>')
+        for t in sorted(v["threads"], key=lambda t: (t.get("parent") is not None, t["agent"])):
+            ev_rows.append(f'<tr><td>{esc(t["agent"])}</td><td><code>{esc(t["model"])}</code></td>'
+                           f'<td>{esc(", ".join(t["skills"]) or "–")}</td><td>${t.get("cost") or 0:.3f}</td>'
+                           f'<td>{(t.get("active_seconds") or 0):.0f}s</td></tr>')
+    evidence = ('<table><tr><th>Agent (thread)</th><th>Model</th><th>Skill</th><th>List cost</th><th>Active</th></tr>'
+                + "".join(ev_rows) + "</table>") if ev_rows else \
+        '<p class="small">Run <code>debrief.py collect</code> to pull cost and model per agent from the platform.</p>'
+
+    # both proposals, side by side
+    side = ""
+    if cold and warm and (OUT / "vandelay-cold.md").exists() and (OUT / "vandelay-warm.md").exists():
+        side = ('<details><summary style="cursor:pointer;font-weight:650">Read both Vandelay proposals side by side</summary>'
+                '<div class="two" style="margin-top:10px">'
+                f'<div class="box"><b>Without lessons</b><pre style="white-space:pre-wrap;font-size:13px">{esc((OUT / "vandelay-cold.md").read_text())}</pre></div>'
+                f'<div class="box"><b>With lessons</b><pre style="white-space:pre-wrap;font-size:13px">{esc((OUT / "vandelay-warm.md").read_text())}</pre></div>'
+                '</div></details>')
 
     page = f"""<!doctype html><html><head><meta charset="utf-8"><title>Debrief</title>
 <style>{REPORT_CSS}</style></head><body><main>{banner}
@@ -526,6 +667,9 @@ def cmd_report(args) -> None:
 <h2>Why the second bid won, in the buyer's words</h2>{why_html}
 <h2>Four specialists, in parallel</h2><div class="box">{lanes or '<p class="small">No trace recorded.</p>'}
 <p class="small">Bars: delegated → reply. Orange ticks: the coordinator reading its lessons from memory.</p></div>
+<h2>Running on Claude Platform: cost, models and Skills per agent</h2>{evidence}
+<p class="small">From the Managed Agents session and thread usage API: list cost, prompt-cache reads, and the model and Skill each agent actually ran with.</p>
+{side}
 <p class="small" style="margin-top:24px">Live sessions on Claude Platform: {links or "n/a"}</p>
 </main></body></html>"""
     out = OUT / "report.html"
@@ -552,9 +696,15 @@ def main() -> None:
         p.add_argument("--backend", choices=["store", "local"], default="store")
     s = sub.add_parser("report", help="write outputs/report.html, the demo screen (offline)")
     s.add_argument("--banner", default="", help="optional notice at the top, e.g. SAMPLE DATA")
+    s = sub.add_parser("collect", help="add platform usage/cost per agent to saved verdicts")
+    s.add_argument("--label", default="")
+    sub.add_parser("manifest", help="write outputs/deployment.json: agents, models, Skills")
+    s = sub.add_parser("serve", help="serve outputs/ for the war room and report")
+    s.add_argument("--port", type=int, default=8765)
     args = ap.parse_args()
-    {"setup": cmd_setup, "calibrate": cmd_calibrate, "round": cmd_round,
-     "score": cmd_score, "lessons": cmd_lessons, "report": cmd_report}[args.cmd](args)
+    {"setup": cmd_setup, "calibrate": cmd_calibrate, "round": cmd_round, "score": cmd_score,
+     "lessons": cmd_lessons, "report": cmd_report, "collect": cmd_collect, "manifest": cmd_manifest,
+     "serve": cmd_serve}[args.cmd](args)
 
 
 if __name__ == "__main__":
