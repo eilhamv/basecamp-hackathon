@@ -10,6 +10,7 @@ create_specialists.py and upload_skills.py.
     python debrief.py round --rfp vandelay --buyer vandelay --label vandelay-warm --use-memory
     python debrief.py score                          # scoreboard + leak check
     python debrief.py lessons                        # what the swarm remembered
+    python debrief.py report                         # outputs/report.html, the demo screen
 
 Add --backend local to round/lessons/score if the memory store isn't available.
 The API key is read from ANTHROPIC_API_KEY only.
@@ -47,7 +48,10 @@ def need(path: str) -> str:
 
 def client() -> Anthropic:
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        sys.exit("Set ANTHROPIC_API_KEY first.")
+        sys.exit("Set ANTHROPIC_API_KEY first (see README: source .env).")
+    if os.environ.get("ANTHROPIC_BASE_URL"):
+        print("WARNING: ANTHROPIC_BASE_URL is set, so calls go to a gateway, not the workspace API. "
+              "Run `unset ANTHROPIC_BASE_URL` for Managed Agents.", file=sys.stderr)
     return Anthropic()
 
 
@@ -146,6 +150,7 @@ def print_verdict(v: dict, label: str) -> None:
 def cmd_calibrate(args) -> None:
     c = client()
     ok = True
+    record = {"buyer": args.buyer, "model": BUYER_MODEL, "runs": []}
     for kind, should_win in (("bad", False), ("good", True)):
         proposal = need(f"calibration/{args.buyer}-{kind}.md")
         outcomes = []
@@ -153,19 +158,35 @@ def cmd_calibrate(args) -> None:
             v = judge(c, args.buyer, proposal)
             print_verdict(v, f"{kind} proposal, try {attempt}")
             outcomes.append((v["won"], v["passed"]))
+            record["runs"].append({"kind": kind, "try": attempt, "won": v["won"], "passed": v["passed"]})
         stable = outcomes[0] == outcomes[1]
         right = all(won == should_win for won, _ in outcomes)
         print(f"  -> {kind}: {'OK' if right and stable else 'PROBLEM'} (expected {'WIN' if should_win else 'LOSS'}, stable={stable})")
         ok &= right and stable
+    record["passed"] = ok
+    OUT.mkdir(exist_ok=True)
+    (OUT / f"calibration-{args.buyer}.json").write_text(json.dumps(record, indent=2))
     print("\nCALIBRATION " + ("PASSED: the buyer can be trusted." if ok else "FAILED: fix buyers/*.json before bidding."))
     sys.exit(0 if ok else 1)
 
 
 # --------------------------------------------------------------------------- sessions
 
-def stream_session(c: Anthropic, session_id: str, text: str, quiet: bool = False) -> str:
-    """Send one user message and stream until the session goes idle. Returns the agent's text."""
+def stream_session(c: Anthropic, session_id: str, text: str, quiet: bool = False) -> tuple[str, list]:
+    """Send one user message and stream until the session goes idle.
+
+    Returns the agent's text and a trace of timed events ({t, kind, agent}) for the report's
+    fan-out timeline.
+    """
     parts: list[str] = []
+    trace: list[dict] = []
+    t0 = time.time()
+
+    def mark(kind: str, agent: str, label: str) -> None:
+        t = round(time.time() - t0, 1)
+        trace.append({"t": t, "kind": kind, "agent": agent})
+        print(f"  {t:>6.1f}s  [{label}] {agent}", flush=True)
+
     with c.beta.sessions.events.stream(session_id) as stream:
         c.beta.sessions.events.send(
             session_id,
@@ -174,16 +195,18 @@ def stream_session(c: Anthropic, session_id: str, text: str, quiet: bool = False
         for event in stream:
             t = event.type
             if t == "session.thread_created":
-                print(f"  [thread spawned]  {getattr(event, 'agent_name', '?')}", flush=True)
+                mark("spawned", getattr(event, "agent_name", "?"), "thread spawned")
             elif t == "agent.thread_message_sent":
-                print(f"  [delegate →]      {getattr(event, 'to_agent_name', '?')}", flush=True)
+                mark("delegated", getattr(event, "to_agent_name", "?"), "delegate →   ")
             elif t == "agent.thread_message_received":
-                print(f"  [reply ←]         {getattr(event, 'from_agent_name', '?')}", flush=True)
+                mark("replied", getattr(event, "from_agent_name", "?"), "reply ←      ")
             elif t == "agent.tool_use":
                 inp = getattr(event, "input", {}) or {}
                 target = str(inp.get("path") or inp.get("file_path") or inp.get("command") or "")
-                tag = "memory" if "/mnt/memory" in target else "tool"
-                print(f"  [{tag}: {getattr(event, 'name', '?')}] {target[:80]}", flush=True)
+                if "/mnt/memory" in target:
+                    mark("memory", target[:60], "memory read  ")
+                else:
+                    print(f"  [tool: {getattr(event, 'name', '?')}]", flush=True)
             elif t == "agent.message":
                 for block in event.content:
                     if getattr(block, "type", None) == "text":
@@ -191,8 +214,9 @@ def stream_session(c: Anthropic, session_id: str, text: str, quiet: bool = False
                         if not quiet:
                             print(block.text, end="", flush=True)
             elif t == "session.status_idle":
+                mark("done", "Coordinator", "finished     ")
                 break
-    return "".join(parts)
+    return "".join(parts), trace
 
 
 def memory_resource(instructions: str) -> list:
@@ -248,14 +272,15 @@ def cmd_round(args) -> None:
                                      title=f"Debrief bid: {args.label}", resources=resources)
     print(f"Bid {args.label}: session {session.id}  (memory: {'on' if args.use_memory else 'off'})\n")
     t0 = time.time()
-    text = stream_session(c, session.id, message, quiet=args.quiet)
+    text, trace = stream_session(c, session.id, message, quiet=args.quiet)
     seconds = round(time.time() - t0)
     proposal = extract_proposal(text)
     (OUT / f"{args.label}.md").write_text(proposal)
     print(f"\n\n  proposal saved: outputs/{args.label}.md  ({len(proposal.split())} words, {seconds}s)")
 
     verdict = judge(c, args.buyer, proposal)
-    verdict.update(label=args.label, memory=bool(args.use_memory), seconds=seconds, session_id=session.id)
+    verdict.update(label=args.label, rfp=args.rfp, memory=bool(args.use_memory), seconds=seconds,
+                   words=len(proposal.split()), session_id=session.id, trace=trace)
     (OUT / f"{args.label}.verdict.json").write_text(json.dumps(verdict, indent=2))
     print_verdict(verdict, args.label)
 
@@ -287,12 +312,14 @@ def debrief(c: Anthropic, verdict: dict, backend: str, environment_id: str, coor
             agent=coordinator_id, environment_id=environment_id, title=f"Debrief: {verdict['label']}",
             resources=memory_resource("Your lessons from past bids. Keep them general and current."),
         )
-        stream_session(c, session.id, (
+        _, _trace = stream_session(c, session.id, (
             "DEBRIEF MODE. Do not delegate to any specialist. The buyer scored our last proposal:\n"
             f"Result: {'WON' if verdict['won'] else 'LOST'} {verdict['passed']}/{verdict['total']}\n{findings}\n\n"
             f"Update /mnt/memory/lessons.md. {DEBRIEF_RULES} Then print the final file."
         ))
-    print("\n\n=== LESSONS NOW IN MEMORY ===\n" + read_lessons(c, backend))
+    lessons = read_lessons(c, backend)
+    (OUT / "lessons-snapshot.md").write_text(lessons)  # lets `report` run offline
+    print("\n\n=== LESSONS NOW IN MEMORY ===\n" + lessons)
 
 
 # --------------------------------------------------------------------------- score
@@ -334,7 +361,176 @@ def cmd_score(args) -> None:
 
 
 def cmd_lessons(args) -> None:
-    print(read_lessons(client(), args.backend) or "(no lessons yet)")
+    print(read_lessons(None if args.backend == "local" else client(), args.backend) or "(no lessons yet)")
+
+
+# --------------------------------------------------------------------------- report (the demo screen)
+
+REPORT_CSS = """
+*{box-sizing:border-box}body{margin:0;font:17px/1.45 -apple-system,Segoe UI,Helvetica,Arial,sans-serif;
+color:#1d1d1f;background:#f6f5f2}main{max-width:1180px;margin:0 auto;padding:28px 32px 60px}
+h1{font-size:44px;margin:0;letter-spacing:-.02em}.tag{color:#6b6b6b;font-size:20px;margin:2px 0 18px}
+h2{font-size:22px;margin:34px 0 12px}.banner{background:#fff3cd;border:1px solid #e0c060;padding:8px 14px;
+border-radius:8px;font-weight:600;margin-bottom:14px}.cards{display:grid;grid-template-columns:1fr 40px 1fr 40px 1fr;
+align-items:stretch}.arrow{display:flex;align-items:center;justify-content:center;font-size:28px;color:#999}
+.card{background:#fff;border-radius:14px;padding:18px 20px;border:2px solid #e6e3dc}.card .k{font-size:13px;
+text-transform:uppercase;letter-spacing:.06em;color:#777}.card .who{font-size:21px;font-weight:650;margin:2px 0 10px}
+.res{font-size:46px;font-weight:800;line-height:1}.res small{font-size:24px;font-weight:600;color:#555}
+.won{border-color:#1f8a4c}.won .res{color:#1f8a4c}.lost .res{color:#c0392b}.meta{color:#666;font-size:14px;margin-top:8px}
+.delta{margin:16px 0 0;font-size:22px;font-weight:650}.delta b{color:#1f8a4c}
+table{border-collapse:collapse;width:100%;background:#fff;border-radius:12px;overflow:hidden}
+th,td{padding:10px 14px;border-bottom:1px solid #eee;text-align:left}th{background:#faf9f6;font-size:14px;color:#555}
+td.c{text-align:center;font-size:22px;font-weight:700}.p{color:#1f8a4c}.f{color:#c0392b}.na{color:#bbb}
+tr.ctl td{background:#f3f1ff}.pill{display:inline-block;font-size:12px;padding:2px 8px;border-radius:99px;
+background:#e9e6ff;color:#4b3fb3;margin-left:6px;font-weight:600}.two{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.box{background:#fff;border-radius:12px;padding:16px 20px;border:1px solid #e6e3dc}.box ul{margin:6px 0 0;padding-left:20px}
+.ok{color:#1f8a4c;font-weight:700}.bad{color:#c0392b;font-weight:700}.why{display:grid;grid-template-columns:200px 1fr 1fr;
+gap:0;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #e6e3dc}.why div{padding:10px 14px;
+border-bottom:1px solid #eee;font-size:15px}.why .h{background:#faf9f6;font-weight:650;font-size:14px;color:#555}
+.why .cold{color:#8a2a1f}.why .warm{color:#14663a}.lane{display:grid;grid-template-columns:190px 1fr 60px;align-items:center;
+gap:10px;margin:5px 0;font-size:14px}.track{position:relative;height:18px;background:#efede8;border-radius:5px}
+.bar{position:absolute;top:0;height:18px;border-radius:5px;background:#5b7cfa}.bar.coord{background:#2d2d2d}
+.tick{position:absolute;top:-3px;width:4px;height:24px;background:#e67e22;border-radius:2px}.small{color:#777;font-size:13px}
+a{color:#3b5bdb}
+"""
+
+
+def _lanes(trace: list, seconds: float) -> str:
+    """Swimlanes: one bar per specialist (delegated → replied), coordinator end to end, memory reads as ticks."""
+    import html
+    total = max([seconds or 0] + [e["t"] for e in trace]) or 1
+    pct = lambda t: f"{100 * t / total:.2f}%"
+    rows = []
+    done = next((e["t"] for e in trace if e["kind"] == "done"), total)
+    ticks = "".join(f'<span class="tick" style="left:{pct(e["t"])}" title="memory read"></span>'
+                    for e in trace if e["kind"] == "memory")
+    rows.append(f'<div class="lane"><div><b>Coordinator</b></div><div class="track">'
+                f'<span class="bar coord" style="left:0;width:{pct(done)}"></span>{ticks}</div>'
+                f'<div class="small">{done:.0f}s</div></div>')
+    agents = []
+    for e in trace:
+        if e["kind"] in ("spawned", "delegated") and e["agent"] not in agents and e["agent"] != "Coordinator":
+            agents.append(e["agent"])
+    for a in agents:
+        start = min(e["t"] for e in trace if e["agent"] == a and e["kind"] in ("spawned", "delegated"))
+        end = next((e["t"] for e in trace if e["agent"] == a and e["kind"] == "replied" and e["t"] >= start), done)
+        rows.append(f'<div class="lane"><div>{html.escape(a)}</div><div class="track"><span class="bar" '
+                    f'style="left:{pct(start)};width:{pct(max(end - start, total * 0.01))}"></span></div>'
+                    f'<div class="small">{end - start:.0f}s</div></div>')
+    return "".join(rows)
+
+
+def cmd_report(args) -> None:
+    import html
+    esc = html.escape
+    verdicts = {json.loads(p.read_text())["label"]: json.loads(p.read_text()) for p in OUT.glob("*.verdict.json")}
+    if not verdicts:
+        sys.exit("No verdicts yet. Run the rounds first.")
+    order = [l for l in ("acme-cold", "vandelay-cold", "vandelay-warm") if l in verdicts] + \
+            sorted(l for l in verdicts if l not in ("acme-cold", "vandelay-cold", "vandelay-warm"))
+    titles = {"acme-cold": ("Training deal", "Acme · no lessons"),
+              "vandelay-cold": ("Unseen customer", "Vandelay · no lessons"),
+              "vandelay-warm": ("Unseen customer", "Vandelay · with lessons")}
+
+    cards = []
+    for i, label in enumerate(order[:3]):
+        v = verdicts[label]
+        k, who = titles.get(label, ("Bid", label))
+        cls = "won" if v["won"] else "lost"
+        cards.append(f'<div class="card {cls}"><div class="k">{k}</div><div class="who">{esc(who)}</div>'
+                     f'<div class="res">{"WON" if v["won"] else "LOST"} <small>{v["passed"]}/{v["total"]}</small></div>'
+                     f'<div class="meta">memory {"on" if v.get("memory") else "off"} · {v.get("seconds", "?")}s · '
+                     f'{v.get("words", "?")} words</div></div>')
+        if i < min(len(order), 3) - 1:
+            cards.append('<div class="arrow">→</div>')
+    cold, warm = verdicts.get("vandelay-cold"), verdicts.get("vandelay-warm")
+    delta = ""
+    if cold and warm:
+        d = warm["passed"] - cold["passed"]
+        delta = (f'<p class="delta">Same swarm, same customer it had never seen: <b>{d:+d} criteria</b> '
+                 f'once it had lessons from losing a different deal.</p>')
+
+    # criteria grid, by criterion id, across bids
+    ids, names = [], {}
+    for label in order:
+        for r in verdicts[label]["criteria"]:
+            if r["id"] not in ids:
+                ids.append(r["id"])
+            names.setdefault(r["id"], r["name"])
+    head = "".join(f"<th>{esc(titles.get(l, ('', l))[1])}</th>" for l in order)
+    grid = []
+    for cid in ids:
+        ctl = names[cid].startswith("CONTROL")
+        cells = []
+        for label in order:
+            r = next((x for x in verdicts[label]["criteria"] if x["id"] == cid), None)
+            cells.append('<td class="c na">–</td>' if r is None else
+                         f'<td class="c {"p" if r["verdict"] == "PASS" else "f"}" title="{esc(r["reason"])}">'
+                         f'{"✓" if r["verdict"] == "PASS" else "✗"}</td>')
+        name = esc(names[cid].replace("CONTROL: ", ""))
+        pill = '<span class="pill">control: not taught, should stay flat</span>' if ctl else ""
+        grid.append(f'<tr class="{"ctl" if ctl else ""}"><td>{name}{pill}</td>{"".join(cells)}</tr>')
+
+    # lessons + leak check
+    snap = OUT / "lessons-snapshot.md"
+    lessons = snap.read_text() if snap.exists() else ((OUT / "lessons.md").read_text() if (OUT / "lessons.md").exists() else "")
+    items = [re.sub(r"^(\s*[-*]|\s*\d+[.)])\s*", "", ln).strip() for ln in lessons.splitlines()
+             if re.match(r"^\s*([-*]|\d+[.)])\s+", ln)]
+    hits = leak_check(lessons)
+    leak = (f'<p class="ok">Leak check: PASS. No customer names or deal figures.</p>' if lessons and not hits else
+            f'<p class="bad">Leak check: FAIL {esc(str(hits))}</p>' if hits else '<p class="small">No lessons yet.</p>')
+    lessons_html = "<ul>" + "".join(f"<li>{esc(re.sub(r'[*_`]', '', x))}</li>" for x in items) + "</ul>" if items else \
+        f"<pre>{esc(lessons)}</pre>"
+
+    # calibration
+    cal_rows = []
+    for p in sorted(OUT.glob("calibration-*.json")):
+        cal = json.loads(p.read_text())
+        def summ(kind):
+            runs = [r for r in cal["runs"] if r["kind"] == kind]
+            return " / ".join(f'{"WON" if r["won"] else "LOST"} {r["passed"]}/5' for r in runs)
+        cal_rows.append(f'<li><b>{esc(cal["buyer"].title())} buyer</b>: weak proposal {summ("bad")} · '
+                        f'strong proposal {summ("good")} → '
+                        f'{"<span class=ok>trusted</span>" if cal["passed"] else "<span class=bad>not trusted</span>"}</li>')
+    cal_html = "<ul>" + "".join(cal_rows) + "</ul>" if cal_rows else '<p class="small">Run calibrate first.</p>'
+
+    # why the warm bid won: the buyer's own words, cold vs warm
+    why = []
+    if cold and warm:
+        for cid in ids:
+            rc = next((x for x in cold["criteria"] if x["id"] == cid), None)
+            rw = next((x for x in warm["criteria"] if x["id"] == cid), None)
+            if rc and rw and rc["verdict"] != rw["verdict"]:
+                why.append(f'<div><b>{esc(names[cid])}</b></div><div class="cold">✗ {esc(rc["reason"])}</div>'
+                           f'<div class="warm">✓ {esc(rw["reason"])}</div>')
+    why_html = ('<div class="why"><div class="h">Criterion</div><div class="h">Without lessons</div>'
+                '<div class="h">With lessons</div>' + "".join(why) + "</div>") if why else \
+        '<p class="small">No criterion changed between the cold and warm bids.</p>'
+
+    lanes = "".join(f'<h3 style="margin:18px 0 6px;font-size:16px">{esc(titles.get(l, ("", l))[1])}</h3>'
+                    f'{_lanes(verdicts[l].get("trace", []), verdicts[l].get("seconds", 0))}'
+                    for l in order if verdicts[l].get("trace"))
+    links = " · ".join(f'<a href="https://platform.claude.com/sessions/{esc(verdicts[l]["session_id"])}">'
+                       f'{esc(l)}</a>' for l in order if verdicts[l].get("session_id"))
+    banner = f'<div class="banner">{esc(args.banner)}</div>' if args.banner else ""
+
+    page = f"""<!doctype html><html><head><meta charset="utf-8"><title>Debrief</title>
+<style>{REPORT_CSS}</style></head><body><main>{banner}
+<h1>Debrief</h1><p class="tag">Lose once. Win the next one. A proposal swarm that learns from the buyer's debrief.</p>
+<div class="cards">{"".join(cards)}</div>{delta}
+<h2>The buyer's hidden scorecard</h2>
+<table><tr><th>Criterion (never shown to the swarm)</th>{head}</tr>{"".join(grid)}</table>
+<div class="two"><div><h2>What it learned from losing</h2><div class="box">{lessons_html}{leak}</div></div>
+<div><h2>Can we trust the buyer?</h2><div class="box">{cal_html}
+<p class="small">The buyer runs on {esc(BUYER_MODEL)} with one PASS/FAIL call per criterion. The swarm's coordinator runs on {esc(COORDINATOR_MODEL)}.</p></div></div></div>
+<h2>Why the second bid won, in the buyer's words</h2>{why_html}
+<h2>Four specialists, in parallel</h2><div class="box">{lanes or '<p class="small">No trace recorded.</p>'}
+<p class="small">Bars: delegated → reply. Orange ticks: the coordinator reading its lessons from memory.</p></div>
+<p class="small" style="margin-top:24px">Live sessions on Claude Platform: {links or "n/a"}</p>
+</main></body></html>"""
+    out = OUT / "report.html"
+    out.write_text(page)
+    print(f"Report: {out.resolve()}")
 
 
 # --------------------------------------------------------------------------- cli
@@ -354,9 +550,11 @@ def main() -> None:
     for name in ("round", "score", "lessons"):
         p = s if name == "round" else sub.add_parser(name)
         p.add_argument("--backend", choices=["store", "local"], default="store")
+    s = sub.add_parser("report", help="write outputs/report.html, the demo screen (offline)")
+    s.add_argument("--banner", default="", help="optional notice at the top, e.g. SAMPLE DATA")
     args = ap.parse_args()
     {"setup": cmd_setup, "calibrate": cmd_calibrate, "round": cmd_round,
-     "score": cmd_score, "lessons": cmd_lessons}[args.cmd](args)
+     "score": cmd_score, "lessons": cmd_lessons, "report": cmd_report}[args.cmd](args)
 
 
 if __name__ == "__main__":
