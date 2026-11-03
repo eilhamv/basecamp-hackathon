@@ -51,7 +51,7 @@ def need(path: str) -> str:
 
 def client() -> Anthropic:
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        sys.exit("Set ANTHROPIC_API_KEY first (see README: source .env).")
+        sys.exit("Set ANTHROPIC_API_KEY first: put it in build/.env, then run `source env.sh` (README step 3).")
     if os.environ.get("ANTHROPIC_BASE_URL"):
         print("WARNING: ANTHROPIC_BASE_URL is set, so calls go to a gateway, not the workspace API. "
               "Run `unset ANTHROPIC_BASE_URL` for Managed Agents.", file=sys.stderr)

@@ -4,4 +4,4 @@
 source .venv/bin/activate
 set -a; [ -f .env ] && source .env; set +a
 unset ANTHROPIC_BASE_URL
-if [ -n "$ANTHROPIC_API_KEY" ]; then echo "workspace key loaded"; else echo "no key: create build/.env first"; fi
+if [ -n "$ANTHROPIC_API_KEY" ]; then echo "workspace key loaded"; else echo "no key: create .env here in build/ (README step 3)"; fi
