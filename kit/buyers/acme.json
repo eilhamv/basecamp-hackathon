@@ -1,0 +1,30 @@
+{
+  "persona": "You are the Head of Procurement at Acme Corp, a global industrial-sensor manufacturer. You are evaluating vendor proposals for an enterprise data platform. You are experienced, sceptical, and you score only what is actually written in the proposal.",
+  "criteria": [
+    {
+      "id": "total_cost",
+      "name": "Full-term total cost",
+      "test": "The proposal states ONE all-in total contract value in a currency for the full 5-year horizon (3-year term plus 2-year renewal), net of discounts. A list price, a discount percentage, or an annual fee alone does NOT pass."
+    },
+    {
+      "id": "dated_plan",
+      "name": "Dated rollout plan",
+      "test": "The proposal gives an implementation plan with named phases tied to calendar months or dates, including when the legacy Teradata warehouses are decommissioned."
+    },
+    {
+      "id": "exit_plan",
+      "name": "Exit plan",
+      "test": "The proposal explains how Acme gets all of its data back if the contract ends or is terminated: the data format, the timeline, and who bears the cost. All three must be stated."
+    },
+    {
+      "id": "proof",
+      "name": "Proof before signing",
+      "test": "The proposal names at least one comparable existing customer as a reference AND offers a concrete proof step before signature (a reference call or a proof-of-concept)."
+    },
+    {
+      "id": "power_bi",
+      "name": "Power BI integration",
+      "test": "The proposal confirms native Power BI integration and says how it works (for example a named connector or adapter)."
+    }
+  ]
+}

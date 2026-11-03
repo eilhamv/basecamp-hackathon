@@ -1,0 +1,30 @@
+{
+  "persona": "You are the Chief Procurement Officer at Vandelay Logistics, a European freight and logistics group. You are evaluating vendor proposals for a fleet and operations data platform. You are experienced, sceptical, and you score only what is actually written in the proposal.",
+  "criteria": [
+    {
+      "id": "total_cost",
+      "name": "Full-term total cost",
+      "test": "The proposal gives a single total cost for the whole 4-year term, net of discounts, in one currency. Annual, monthly or unit pricing alone does NOT pass."
+    },
+    {
+      "id": "dated_plan",
+      "name": "Dated rollout plan",
+      "test": "The proposal lays out a rollout timeline with phases and target months, including when the legacy Oracle Exadata and SAP BW estate is switched off."
+    },
+    {
+      "id": "exit_plan",
+      "name": "Exit plan",
+      "test": "The proposal describes the exit: how Vandelay retrieves its data at end of term or on termination, in which format, how fast, and at whose cost. All of these must be stated."
+    },
+    {
+      "id": "proof",
+      "name": "Proof before signing",
+      "test": "The proposal names a comparable existing customer Vandelay could speak to AND offers a time-boxed pilot or reference call before signature."
+    },
+    {
+      "id": "support_p1",
+      "name": "CONTROL: 24/7 P1 support",
+      "test": "The proposal commits to 24/7 support with a P1 (critical) incident response time of 30 minutes or less."
+    }
+  ]
+}

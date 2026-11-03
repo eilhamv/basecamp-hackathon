@@ -1,0 +1,8 @@
+build/
+.venv/
+__pycache__/
+outputs/
+.env
+.*_id
+.specialist_ids.json
+.skill_ids.json
