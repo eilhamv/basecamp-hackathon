@@ -2,7 +2,17 @@
 
 **Lose once. Win the next one.** A proposal team of Claude agents loses a bid, reads the buyer's debrief, stores general lessons in memory, and then wins a customer it has never seen. A calibrated AI buyer scores every bid, and a control criterion checks that the gain is real.
 
-![Report screen, sample data](docs/demo-screen.png)
+**Result from a real run:**
+
+| Bid | Lessons in memory | Score |
+|---|---|---|
+| Acme, the training deal | no | LOST 3/5 |
+| Vandelay, an unseen customer | no | LOST 2/5 |
+| Vandelay, an unseen customer | yes | **WON 5/5** |
+
+The control criterion, which no lesson covered, passed both times. Each bid cost about $1.10–1.30.
+
+![War room](docs/war-room.png)
 
 Built on Claude Platform:
 - **Managed Agents:** a multi-agent coordinator with 4 specialists running in parallel
@@ -10,182 +20,107 @@ Built on Claude Platform:
 - **Memory stores**
 - **An LLM-as-judge eval:** structured outputs, calibration, a held-out customer and a control criterion
 
-It extends [rosscrooke/specialist-swarm](https://github.com/rosscrooke/specialist-swarm) with the memory pattern from [rosscrooke/institutional-memory](https://github.com/rosscrooke/institutional-memory).
-- [PLAN.md](PLAN.md): results, the capability review, and the 5-screen demo script.
-- This page: how to run it yourself.
+It extends [rosscrooke/specialist-swarm](https://github.com/rosscrooke/specialist-swarm) with the memory pattern from [rosscrooke/institutional-memory](https://github.com/rosscrooke/institutional-memory). [PLAN.md](PLAN.md) has the full results, the capability review and the 3-minute demo script.
 
 ---
 
-## What you need
+## Run it: 4 commands, then one button
 
-| | |
-|---|---|
-| Python | 3.10 or newer, plus `git` |
-| API key | From a [Claude Console](https://platform.claude.com) workspace with **Managed Agents** enabled. **Multi-agent** (research preview) is needed for the parallel swarm; without it, use `--solo` in step 4 |
-| Models | `claude-opus-5-5` (coordinator), `claude-sonnet-5-5` (buyer). The specialists use the starter's `claude-sonnet-4-6` and `claude-haiku-4-5`. You can override with `COORDINATOR_MODEL` and `BUYER_MODEL` |
-| Budget | About **$5** at list price for one full run: about $1–1.30 per bid × 3, plus a debrief and about 55 judge calls |
-| Time | About **30 minutes**. Each bid takes 6–8 minutes, and two of them run in parallel |
-
-The key goes in a git-ignored `.env` file. Never commit it or paste it anywhere else.
-
----
-
-## Run it
-
-All commands are for macOS or Linux, in a terminal.
-
-### 1. Get the code
+**You need:**
+- Python 3.10+ and `git`.
+- An Anthropic API key from a [Claude Console](https://platform.claude.com) workspace with **Managed Agents** enabled, including multi-agent (research preview).
+- A budget of about **$5** and **20 minutes** for the first full run.
 
 ```bash
 git clone https://github.com/eilhamv/basecamp-hackathon.git && cd basecamp-hackathon
 ```
 
 ```bash
-git clone https://github.com/rosscrooke/specialist-swarm.git build
+python3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt
 ```
-
-```bash
-cp -R kit/* build/ && cd build
-```
-
-`build/` holds the starter swarm plus this repo's kit, and it's git-ignored. **Every command from here on runs inside `build/`.** The kit replaces the starter's `upload_skills.py` with a version patched for Anthropic SDK 2.x.
-
-### 2. Install
-
-```bash
-python3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt && .venv/bin/pip install -q -U anthropic
-```
-
-### 3. Add your key and load it
 
 ```bash
 printf 'ANTHROPIC_API_KEY=%s\n' 'PASTE-YOUR-KEY-HERE' > .env
 ```
 
 ```bash
-source env.sh
+.venv/bin/python app.py
 ```
 
-`env.sh` activates the virtual environment, loads `.env`, and unsets `ANTHROPIC_BASE_URL` so calls go to the Claude API rather than a proxy. **Run `source env.sh` in every new terminal,** from inside `build/`. It should print `workspace key loaded`.
+Your browser opens **http://127.0.0.1:8765**. Click **▶ Run everything**:
 
-### 4. Deploy the agents to Claude Platform
+| Step | What happens | Time |
+|---|---|---|
+| 1. Prepare | Clones the starter swarm into `build/` and adds this repo's kit | seconds |
+| 2. Deploy | Creates the environment, 4 specialists, their Skills, the coordinator and a memory store on Claude Platform | ~1 min |
+| 3. Calibrate | Each AI buyer must reject a weak proposal and accept a strong one, twice | ~1 min |
+| 4. Bid ×2 in parallel | Acme (then the debrief writes lessons to memory) ∥ Vandelay without lessons | ~7 min |
+| 5. Bid | Vandelay **with** lessons: the test | ~7 min |
+| 6. Report | Pulls cost, model and Skill per agent from the platform and builds the report | seconds |
 
-```bash
-python setup_environment.py && python create_specialists.py && python upload_skills.py && python debrief.py setup
-```
+While a bid runs, the page shows **Watch live** links. When it finishes, **Demo screens** appears:
+- **📊 Report:** cold vs. warm, the buyer's hidden scorecard, the lessons, calibration, and cost per agent.
+- **🎬 War room:** a replay of each bid, with the agents lighting up in parallel, memory being read, and the buyer's sealed criteria flipping.
 
-Expected output: 4 specialists created, 3 Skills attached, then `Coordinator (swarm, claude-opus-5-5)` and `Memory store: …`.
+Finished steps are skipped, so you can click again safely. **Rebuild report** refreshes only the report. Stop the app with `Ctrl-C`.
 
-| If it fails on… | Do this |
-|---|---|
-| `multiagent` | `python debrief.py setup --solo` (one coordinator, no specialists) |
-| the coordinator model | `export COORDINATOR_MODEL=claude-opus-4-7`, then `python debrief.py setup` |
-| the memory store | Add `--backend local` to every later `round`, `score` and `lessons` command |
+The key stays in `.env`, which is git-ignored. The app never shows or logs it, and it serves only `build/outputs/`, on `127.0.0.1`.
 
-### 5. Calibrate the AI buyers (never skip)
-
-```bash
-python debrief.py calibrate --buyer acme && python debrief.py calibrate --buyer vandelay
-```
-
-You need `CALIBRATION PASSED` twice. That means each buyer rejected a weak proposal and accepted a strong one, with the same result twice. Without this, the scores mean nothing.
-
-### 6. Run the experiment
-
-**Two terminals at once** (run `source env.sh` in each):
-
-```bash
-python debrief.py round --rfp acme --buyer acme --label acme-cold --learn --quiet
-```
-
-```bash
-python debrief.py round --rfp vandelay --buyer vandelay --label vandelay-cold --quiet
-```
-
-- **The first** is the training deal. It bids on Acme, gets scored, then writes general lessons to memory. It ends with `=== LESSONS NOW IN MEMORY ===`.
-- **The second** is the baseline: the unseen customer, with no lessons.
-
-**When both have finished,** run the test, which is the same unseen customer with the lessons:
-
-```bash
-python debrief.py round --rfp vandelay --buyer vandelay --label vandelay-warm --use-memory --quiet
-```
-
-A `[memory read] /mnt/memory/…` line should appear before the specialists are spawned.
-
-### 7. See the result
-
-```bash
-python debrief.py collect && python debrief.py manifest && python debrief.py score
-```
-
-`score` prints the comparison, the control and the leak check:
-```
-UNSEEN CUSTOMER: cold 2/5 -> warm ?/5 (+?)
-CONTROL (criterion 5, not taught): cold PASS / warm PASS -> flat, as expected
-LEAK CHECK on lessons: PASS (general lessons only)
-```
-
-### 8. Open the demo screens
-
-```bash
-python debrief.py report && python debrief.py serve
-```
-
-Then open:
-
-| Screen | URL |
-|---|---|
-| War room, replay of a recorded bid | http://127.0.0.1:8765/war-room.html?bid=acme-cold&speed=15 |
-| War room, the winning bid | http://127.0.0.1:8765/war-room.html?bid=vandelay-warm&speed=15 |
-| War room, a bid running right now | http://127.0.0.1:8765/war-room.html?live=LABEL |
-| Report: the proof | http://127.0.0.1:8765/report.html |
-
-`serve` binds to `127.0.0.1` only. The 3-minute run of show is in [PLAN.md §3](PLAN.md).
+![Report](docs/report.png)
 
 ---
 
-## Commands
+## Troubleshooting
+
+| What you see | Fix |
+|---|---|
+| "No API key" chip | Create `.env` next to `app.py` containing `ANTHROPIC_API_KEY=...`, then restart the app |
+| Deploy fails on `multiagent` | Your workspace doesn't have multi-agent. Restart with `SOLO=1 .venv/bin/python app.py` (one coordinator, no specialists), then click again |
+| Deploy fails on the coordinator model | Restart with `COORDINATOR_MODEL=claude-opus-4-7 .venv/bin/python app.py` |
+| Calibration fails | The buyer misjudged a known proposal. Read the ✗ reason in the log, tighten that criterion in `kit/buyers/*.json`, and click again |
+| A bid fails | Open the log under the step. Click **Run everything** again; finished bids are kept |
+| Port 8765 is busy | Run `PORT=8780 .venv/bin/python app.py` |
+| Start a completely fresh experiment | Delete `build/outputs/` and click again. Agents and memory are reused, so to clear the lessons too, delete `build/.memory_store_id` |
+
+---
+
+## Command line (optional)
+
+The app runs these same steps. To drive them yourself from `build/`:
+
+```bash
+cd build && source env.sh
+```
 
 | Command | Does |
 |---|---|
-| `debrief.py setup [--solo]` | Creates the coordinator (with a multi-agent roster unless `--solo`) and the memory store |
-| `debrief.py calibrate --buyer B` | Scores a weak and a strong proposal twice each. Writes `outputs/calibration-B.json` |
-| `debrief.py round --rfp R --buyer B --label L [--use-memory] [--learn] [--quiet]` | One bid. Writes `outputs/L.md`, `L.verdict.json` and `L.live.json`. `--learn` also runs the debrief |
-| `debrief.py collect [--label L]` | Adds platform cost, cache use, model and Skill per agent to saved verdicts |
-| `debrief.py manifest` | Writes `outputs/deployment.json`: agents, models and Skills as deployed |
-| `debrief.py score` / `lessons` | Terminal scoreboard and leak check / what the swarm remembered |
-| `debrief.py report [--banner TEXT]` | Writes `outputs/report.html`. Works offline |
-| `debrief.py serve [--port 8765]` | Serves `outputs/` for the war room and report |
+| `python debrief.py setup [--solo]` | Coordinator (with a multi-agent roster unless `--solo`) + memory store. Run it after `setup_environment.py`, `create_specialists.py` and `upload_skills.py` |
+| `python debrief.py calibrate --buyer acme\|vandelay` | Trust test for one buyer |
+| `python debrief.py round --rfp R --buyer B --label L [--use-memory] [--learn] [--quiet]` | One bid. `--learn` runs the debrief afterwards |
+| `python debrief.py collect` / `manifest` | Platform cost and models per agent / deployed agents and Skills |
+| `python debrief.py score` / `lessons` / `report` | Scoreboard and leak check / memory contents / `outputs/report.html` |
+| `python debrief.py serve` | Serves `outputs/` on port 8765 (war room: `war-room.html?bid=L` or `?live=L`) |
 
 **Environment variables:**
 - `COORDINATOR_MODEL`: default `claude-opus-5-5`.
 - `BUYER_MODEL`: default `claude-sonnet-5-5`. Keep it different from the coordinator's.
-- `SPECIALIST_WORDS`: default `300`; lower it to speed bids up.
+- `SPECIALIST_WORDS`: default `300`.
 
 ## Repo layout
 
 | Path | What it is |
 |---|---|
-| `kit/debrief.py` | The CLI: bids, buyer judge, debrief, evidence, report, server |
+| `app.py` | The one-click local app |
+| `requirements.txt` | Python dependency: `anthropic` |
+| `kit/debrief.py` | Bids, buyer judge, debrief, platform evidence, report |
 | `kit/war-room.html` | Live or replayed view of the swarm, memory and buyer |
 | `kit/coordinator_system.md` | The coordinator prompt. Contains **no** scoring criteria |
 | `kit/buyers/*.json` | The buyers' hidden scorecards (Vandelay #5 is the control) |
 | `kit/calibration/*.md` | Weak and strong proposals used to trust-test each buyer |
-| `kit/synthetic-data/rfp-vandelay.md` | The unseen test RFP (fictional) |
+| `kit/synthetic-data/rfp-vandelay.md` | The unseen test RFP |
 | `kit/upload_skills.py` | The starter's Skills uploader, patched for Anthropic SDK 2.x |
-| `kit/env.sh` | Per-terminal setup: venv, key and API routing |
+| `kit/env.sh` | Command-line setup for one terminal |
 | `PLAN.md` | Results, capability review, demo script, risks |
+| `build/` | Created by the app: starter swarm + kit + your results (git-ignored) |
 
-## Troubleshooting
-
-| Symptom | Fix |
-|---|---|
-| `Set ANTHROPIC_API_KEY first` | You're not in `build/`, or you didn't run `source env.sh` in this terminal |
-| `WARNING: ANTHROPIC_BASE_URL is set` | Run `source env.sh` again; it unsets it |
-| `'BetaSkill' object has no attribute 'display_title'` | You're running the starter's `upload_skills.py`. Repeat `cp -R kit/* build/` |
-| `Missing .coordinator_id` | Run step 4 first |
-| The war room is blank | Open it through `debrief.py serve`, not as a file, and check that `outputs/<label>.verdict.json` exists |
-| Costs look 100× too high | You're on an old `debrief.py`. Platform amounts are in cents; the current kit converts them |
-
-All data in this repo is synthetic. Company names, RFPs and figures are fictional.
+All data is synthetic. Company names, RFPs and figures are fictional.

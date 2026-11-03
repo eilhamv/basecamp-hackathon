@@ -118,6 +118,7 @@ function apply(e) {
   } else if (e.kind === "memory" && memMounted) {
     $("mem").classList.add("pulse"); setTimeout(() => $("mem").classList.remove("pulse"), 1800);
     $("memstatus").textContent = `read at ${e.t.toFixed(1)}s`; phase("Reading lessons from memory");
+    if (/lessons[^ ]*\.md/.test(e.agent)) document.querySelector(".mem .file").textContent = e.agent.match(/\/mnt\/memory\S*lessons\S*\.md/)?.[0] || e.agent;
     log(e.t, `<b>memory read</b> /mnt/memory/lessons.md`);
   } else if (e.kind === "done") {
     finished = true; $("coord").classList.remove("working"); $("coord").classList.add("done");

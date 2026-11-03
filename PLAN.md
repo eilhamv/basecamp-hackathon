@@ -21,7 +21,8 @@
 | Calibration, Vandelay buyer | — | weak LOST 0/5 ×2 · strong WON 5/5 ×2 → **trusted** | | | |
 | `acme-cold` (training) | off → writes lessons | **LOST 3/5**: missed calendar dates and a named reference | 446s | 2,202 | $1.28 |
 | `vandelay-cold` (baseline) | off | **LOST 2/5**: missed full-term total, calendar months and a named reference. Control ✓ | 351s | 2,069 | $1.06 |
-| `vandelay-warm` (test) | reads lessons | *running; fill in from `debrief.py score`* | | | |
+| `vandelay-warm` (test) | reads lessons (at 2.8s and 4.7s, before delegating) | **WON 5/5**: calendar milestone dates, one €-total for the term, three named references + dated PoC. Control ✓ | 369s | 2,447 | $1.16 |
+| **Headline** | | **Unseen customer: 2/5 → 5/5 (+3). Control flat (✓/✓). Leak check PASS.** | | | |
 
 **What the runs already proved:**
 - **Parallel fan-out:** all 4 specialists were spawned within **0.7s** of each other in both runs (`outputs/*.verdict.json` → `trace`).
@@ -32,7 +33,10 @@
 - **Model routing and caching, from the platform's own usage API:**
   - Opus 5.5 coordinator **$0.52**, Sonnet 4.6 specialists **$0.12–$0.21**, Haiku 4.5 analyst **$0.04** (Vandelay cold).
   - Of all input tokens, **373K were read from cache** against 79K written and 87 uncached.
-- **The baselines are stronger than planned.** The starter swarm already gives a full-term total (Acme) and an exit plan. So the room for gain on Vandelay is the **3** failed criteria; the best possible result is cold 2/5 → warm 5/5.
+- **The baselines are stronger than planned.** The starter swarm already gives a full-term total (Acme) and an exit plan. So the room for gain on Vandelay was the **3** failed criteria. The warm run flipped **all 3**.
+- **Honest caveats:**
+  - The warm proposal is 18% longer (2,447 vs. 2,069 words). The control criterion stayed flat, and each flip is a specific, quoted fix, not just more text.
+  - n = 1 per arm.
 
 ---
 
@@ -72,12 +76,12 @@ The audience never just watches a terminal. Each act has its own screen, and eac
 
 | Tab | URL | Proves |
 |---|---|---|
-| **A · War room: Acme** | `http://127.0.0.1:8765/war-room.html?bid=acme-cold&speed=15` | 1, 2, 3, 6, 7, 10 |
+| **A · War room: Acme** | `http://127.0.0.1:8765/outputs/war-room.html?bid=acme-cold&speed=15` | 1, 2, 3, 6, 7, 10 |
 | **B · Console: memory store** | `https://platform.claude.com/memory-stores/<memory_store_id>` | 4, 5 |
-| **C · War room: Vandelay with lessons** | `http://127.0.0.1:8765/war-room.html?bid=vandelay-warm&speed=15` | 4 (pulse), 2, 6 |
-| **D · Report** | `http://127.0.0.1:8765/report.html` | 8, 9, 10 |
+| **C · War room: Vandelay with lessons** | `http://127.0.0.1:8765/outputs/war-room.html?bid=vandelay-warm&speed=15` | 4 (pulse), 2, 6 |
+| **D · Report** | `http://127.0.0.1:8765/outputs/report.html` | 8, 9, 10 |
 | **E · Console: the warm session** | `https://platform.claude.com/sessions/<vandelay-warm session_id>` | 1, 11 |
-| *(optional)* **F · Live bid** | `http://127.0.0.1:8765/war-room.html?live=live` | 1, 2 live: "this one is running right now" |
+| *(optional)* **F · Live bid** | `http://127.0.0.1:8765/outputs/war-room.html?live=live` | 1, 2 live: "this one is running right now" |
 
 The IDs come from `outputs/deployment.json` and `outputs/*.verdict.json`. The report's footer links to every session.
 
@@ -114,26 +118,23 @@ The IDs come from `outputs/deployment.json` and `outputs/*.verdict.json`. The re
 ### How to run the demo
 
 **Ten minutes before:**
+1. Run this from the repo folder:
+   ```bash
+   .venv/bin/python app.py
+   ```
+2. Click **Rebuild report**. It pulls fresh cost data and builds the screens.
+3. Open the **Demo screens** buttons on the app page in tabs A, C and D, and log in to the Console for tabs B and E.
+4. Set the browser to full screen at 1440×900 or larger.
+
+**Optional live moment:** about 3 minutes before you go on, start a fresh bid from `build/` in a terminal:
 ```bash
-cd build && source env.sh
+cd build && source env.sh && python debrief.py round --rfp vandelay --buyer vandelay --label live --use-memory --quiet
 ```
-```bash
-python debrief.py collect && python debrief.py manifest && python debrief.py report
-```
-```bash
-python debrief.py serve
-```
-- Open tabs A–E in that order, and log in to the Console first.
-- Set the browser to full screen at 1440×900 or larger, with dark mode off for the report.
-- **Optional live moment:** about 3 minutes before you go on, in a second terminal:
-  ```bash
-  python debrief.py round --rfp vandelay --buyer vandelay --label live --use-memory --quiet
-  ```
-  Then tab F shows it running live. At 2:40, say "and this one is running right now".
+Then open `http://127.0.0.1:8765/outputs/war-room.html?live=live` as tab F.
 
 **Before each act,** reload the war-room tab so its replay starts from zero.
 
-**Backup:** everything above works offline from `outputs/` except the Console tabs. If the network fails, skip B and E: the report's lessons panel and session IDs cover them.
+**Backup:** everything except the Console tabs is served from `build/outputs/` by the local app, so it works offline. If the network fails, skip B and E: the report's lessons panel and session IDs cover them.
 
 ---
 
@@ -195,8 +196,8 @@ The coordinator prompt (`kit/coordinator_system.md`) contains **none** of these 
 | Deploy agents, Skills, coordinator, memory | 5–10 min | ✅. One fix: SDK 2.x renamed the Skills field (`display_title` → `display_name`), now patched in `kit/upload_skills.py`. The coordinator was recreated after the Skills were attached |
 | Calibrate both buyers | 10–12 min | ✅ both trusted |
 | Wave 1 (parallel) | 12–24 min | ✅ Acme 446s, Vandelay 351s |
-| Wave 2 | 24–34 min | ⏳ running |
-| Proof + screens | 34–38 min | `collect`, `manifest`, `report`, `serve` |
+| Wave 2 | 24–34 min | ✅ 369s, WON 5/5 |
+| Proof + screens | 34–38 min | ✅ Now one click: `python app.py` → **Run everything** (skips finished steps) |
 
 ---
 

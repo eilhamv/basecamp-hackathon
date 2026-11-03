@@ -6,3 +6,4 @@ outputs/
 .*_id
 .specialist_ids.json
 .skill_ids.json
+_starter_tmp/

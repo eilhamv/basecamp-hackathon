@@ -494,7 +494,7 @@ th,td{padding:10px 14px;border-bottom:1px solid #eee;text-align:left}th{backgrou
 td.c{text-align:center;font-size:22px;font-weight:700}.p{color:#1f8a4c}.f{color:#c0392b}.na{color:#bbb}
 tr.ctl td{background:#f3f1ff}.pill{display:inline-block;font-size:12px;padding:2px 8px;border-radius:99px;
 background:#e9e6ff;color:#4b3fb3;margin-left:6px;font-weight:600}.two{display:grid;grid-template-columns:1fr 1fr;gap:20px}
-.box{background:#fff;border-radius:12px;padding:16px 20px;border:1px solid #e6e3dc}.box ul{margin:6px 0 0;padding-left:20px}
+.box{background:#fff;border-radius:12px;padding:16px 20px;border:1px solid #e6e3dc}.box pre{white-space:pre-wrap;word-break:break-word}.box ul{margin:6px 0 0;padding-left:20px}
 .ok{color:#1f8a4c;font-weight:700}.bad{color:#c0392b;font-weight:700}.why{display:grid;grid-template-columns:200px 1fr 1fr;
 gap:0;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #e6e3dc}.why div{padding:10px 14px;
 border-bottom:1px solid #eee;font-size:15px}.why .h{background:#faf9f6;font-weight:650;font-size:14px;color:#555}
@@ -585,8 +585,11 @@ def cmd_report(args) -> None:
     # lessons + leak check
     snap = OUT / "lessons-snapshot.md"
     lessons = snap.read_text() if snap.exists() else ((OUT / "lessons.md").read_text() if (OUT / "lessons.md").exists() else "")
-    items = [re.sub(r"^(\s*[-*]|\s*\d+[.)])\s*", "", ln).strip() for ln in lessons.splitlines()
-             if re.match(r"^\s*([-*]|\d+[.)])\s+", ln)]
+    # the agent may write lessons as headings ("## 1. Title (keywords: ...)") or as bullets
+    heads = [re.sub(r"\s*\(keywords?:.*?\)\s*$", "", m.group(1)).strip()
+             for m in re.finditer(r"^#{2,4}\s*(?:\d+[.)]\s*)?(.+)$", lessons, re.M)]
+    items = heads or [re.sub(r"^(\s*[-*]|\s*\d+[.)])\s*", "", ln).strip() for ln in lessons.splitlines()
+                      if re.match(r"^\s*([-*]|\d+[.)])\s+", ln)]
     hits = leak_check(lessons)
     leak = (f'<p class="ok">Leak check: PASS. No customer names or deal figures.</p>' if lessons and not hits else
             f'<p class="bad">Leak check: FAIL {esc(str(hits))}</p>' if hits else '<p class="small">No lessons yet.</p>')
