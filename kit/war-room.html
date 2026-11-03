@@ -173,7 +173,9 @@ async function main() {
     let meta = await get(`${LABEL}.live.json`).catch(() => ({trace: []}));
     setup(dep, meta); let lastT = 0, lastPoll = performance.now();
     const poll = async () => {
-      try { meta = await get(`${LABEL}.live.json`); } catch (e) {}
+      try { meta = await get(`${LABEL}.live.json`); }
+      catch (e) { if (!applied) { phase(`Waiting for bid "${LABEL}" to start`);
+        $("coordstatus").textContent = `start it: python debrief.py round … --label ${LABEL}`; } }
       const tr = meta.trace || [];
       if (applied < tr.length) { while (applied < tr.length) { apply(tr[applied]); lastT = tr[applied++].t; } lastPoll = performance.now(); }
       if (meta.status === "done") { try { showVerdict(await get(`${LABEL}.verdict.json`)); return; } catch (e) {} }
